@@ -15,6 +15,14 @@ const defaultBrowserSettings: BrowserSettings = {
   arrowKeys: true,
 };
 
+function browserSettingsFromServer(settings: Settings): BrowserSettings {
+  return {
+    autoSubmit: settings.auto_submit,
+    autoNext: settings.auto_next,
+    arrowKeys: settings.arrow_keys,
+  };
+}
+
 const modeNames: Record<Mode, string> = {
   sequence: "顺序模式",
   chapter: "章节模式",
@@ -104,9 +112,10 @@ export function App() {
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [installingBank, setInstallingBank] = useState("");
   const [navigatorCollapsed, setNavigatorCollapsed] = useState(window.innerWidth < 850);
+  const legacyBrowserSettings = useRef<BrowserSettings | null>(loadJSON<BrowserSettings>(BROWSER_SETTINGS_KEY));
   const [browserSettings, setBrowserSettings] = useState<BrowserSettings>(() => ({
     ...defaultBrowserSettings,
-    ...(loadJSON<BrowserSettings>(BROWSER_SETTINGS_KEY) || {}),
+    ...(legacyBrowserSettings.current || {}),
   }));
   const fileInput = useRef<HTMLInputElement>(null);
   const restoreStarted = useRef(false);
@@ -120,6 +129,18 @@ export function App() {
 
   const refreshMeta = useCallback(async () => {
     const value = await api.meta();
+    if (legacyBrowserSettings.current) {
+      const legacy = legacyBrowserSettings.current;
+      value.settings = await api.saveSettings({
+        ...value.settings,
+        auto_submit: legacy.autoSubmit,
+        auto_next: legacy.autoNext,
+        arrow_keys: legacy.arrowKeys,
+      });
+      legacyBrowserSettings.current = null;
+      localStorage.removeItem(BROWSER_SETTINGS_KEY);
+    }
+    setBrowserSettings(browserSettingsFromServer(value.settings));
     setMeta(value);
     setFilters((current) => {
       const installed = value.banks.filter((bank) => bank.enabled).map((bank) => bank.id);
@@ -335,6 +356,13 @@ export function App() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [answerResult, browserSettings.arrowKeys, index, openQuestion, question, showBanks, showSettings, submitAnswer]);
 
+  useEffect(() => {
+    if (!showBanks && !showSettings) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [showBanks, showSettings]);
+
   const importBank = async (file: File | undefined) => {
     if (!file) return;
     setImporting(true);
@@ -423,6 +451,15 @@ export function App() {
     setFilters((current) => ({ banks: current.banks }));
   };
 
+  const leavePractice = () => {
+    saveSnapshot();
+    setQuestion(null);
+    setSelections({});
+    setAnswerResult(null);
+    history.replaceState(null, "", "/");
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
+  };
+
   const correctCount = useMemo(() => queue.filter((item) => item.last_correct === true).length, [queue]);
   const wrongCount = useMemo(() => queue.filter((item) => item.last_correct === false).length, [queue]);
 
@@ -441,11 +478,27 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${question ? "practice-active" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <img className="brand-mark" src="/favicon.svg" alt="QuizDock 标志" />
-          <div><strong>QuizDock</strong><span>本地题库刷题工具 · v{meta?.version || "…"}</span></div>
+          <div className="brand-copy">
+            <strong>QuizDock</strong>
+            <span>本地题库刷题工具</span>
+            <div className="brand-meta">
+              <span>v{meta?.version || "…"}</span>
+              <i />
+              {updates?.application.update_available
+                ? <a href={updates.application.release_url} target="_blank" rel="noreferrer">发现 v{updates.application.latest_version}</a>
+                : <button onClick={() => void checkUpdates()} disabled={checkingUpdates}>{checkingUpdates ? "检查中…" : "检查更新"}</button>}
+              {auth?.enabled && <>
+                <i />
+                <button onClick={async () => { await api.logout(); setAuth({ ...auth, authenticated: false }); setMeta(null); }}>{auth.username} · 退出</button>
+              </>}
+              {!question && <button className="mobile-home-settings" onClick={() => setShowSettings(true)}>设置</button>}
+            </div>
+          </div>
+          {question && <button className="practice-exit" onClick={leavePractice}>← 返回练习选择</button>}
         </div>
 
         <section className="side-section overview">
@@ -466,7 +519,6 @@ export function App() {
               <span><b>{bank.name}</b><small>{bank.question_count} 题 · v{bank.version}</small></span>
             </label>
           )) : <p className="muted">尚未导入题库</p>}
-          <button className="secondary wide" onClick={() => fileInput.current?.click()} disabled={importing}>{importing ? "正在导入…" : "＋ 导入 .qbank"}</button>
           <input ref={fileInput} className="hidden" type="file" accept=".qbank,application/zip" onChange={(event) => void importBank(event.target.files?.[0])} />
         </section>
 
@@ -511,17 +563,30 @@ export function App() {
         {!question && !loading && (
           <section className="welcome-card">
             <div className="welcome-art"><span>A</span><span>B</span><span>C</span><span>D</span></div>
-            <p className="eyebrow">{meta?.banks.length ? "题库已就绪" : "从题库包开始"}</p>
-            <h2>{meta?.banks.length ? "选择一种模式，继续你的学习进度" : "导入一个 .qbank 题库开始练习"}</h2>
+            <p className="eyebrow">{meta?.banks.length ? "题库已就绪" : "从题库开始"}</p>
+            <h2>{meta?.banks.length ? "选择一种模式，继续你的学习进度" : "添加题库后开始练习"}</h2>
             <p>题库与应用独立更新。所有题目、进度、收藏和错题记录都保存在本地 SQLite 数据库中。</p>
-            <button className="primary" onClick={() => meta?.banks.length ? void startPractice() : setShowBanks(true)}>{meta?.banks.length ? "开始练习" : "安装或导入题库"}</button>
+            <button className="primary" onClick={() => meta?.banks.length ? void startPractice() : setShowBanks(true)}>{meta?.banks.length ? "开始练习" : "管理题库"}</button>
           </section>
         )}
 
         {loading && <div className="loading-card"><span className="spinner" />正在加载…</div>}
 
         {question && !loading && (
-          <article className="question-card">
+          <div className="practice-layout">
+            {queue.length > 0 && (
+              <section className={`navigator-panel ${navigatorCollapsed ? "collapsed" : ""}`}>
+                <button className="navigator-heading" onClick={() => setNavigatorCollapsed(!navigatorCollapsed)}>
+                  <span><b>答题进度</b><small>{correctCount} 对 · {wrongCount} 错 · {queue.length - correctCount - wrongCount} 未答</small></span>
+                  <i>{navigatorCollapsed ? "⌃" : "⌄"}</i>
+                </button>
+                {!navigatorCollapsed && <div className="number-grid">{queue.map((item, position) => (
+                  <button key={item.uid} className={`number-button ${resultClass(item.last_correct)} ${position === index ? "current" : ""}`} title={item.title} onClick={() => void openQuestion(position)}>{position + 1}</button>
+                ))}</div>}
+              </section>
+            )}
+
+            <article className="question-card">
             <div className="tag-row">{question.tags.slice(0, 8).map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div>
             <div className="markdown stem"><Markdown assetBase={question.asset_base}>{question.stem_md}</Markdown></div>
             <div className="parts">
@@ -567,21 +632,10 @@ export function App() {
                 {answerResult && <button className="primary" onClick={() => void openQuestion(index + 1)}>下一题 →</button>}
               </div>
             </footer>
-          </article>
+            </article>
+          </div>
         )}
       </main>
-
-      {queue.length > 0 && (
-        <section className={`navigator-panel ${navigatorCollapsed ? "collapsed" : ""}`}>
-          <button className="navigator-heading" onClick={() => setNavigatorCollapsed(!navigatorCollapsed)}>
-            <span><b>答题进度</b><small>{correctCount} 对 · {wrongCount} 错 · {queue.length - correctCount - wrongCount} 未答</small></span>
-            <i>{navigatorCollapsed ? "⌃" : "⌄"}</i>
-          </button>
-          {!navigatorCollapsed && <div className="number-grid">{queue.map((item, position) => (
-            <button key={item.uid} className={`number-button ${resultClass(item.last_correct)} ${position === index ? "current" : ""}`} title={item.title} onClick={() => void openQuestion(position)}>{position + 1}</button>
-          ))}</div>}
-        </section>
-      )}
 
       {showBanks && meta && <BankManager
 		meta={meta} updates={updates} importing={importing} checking={checkingUpdates} installing={installingBank}
@@ -590,23 +644,20 @@ export function App() {
 	  />}
       {showSettings && meta && <SettingsDialog server={meta.settings} browser={browserSettings} onClose={() => setShowSettings(false)} onSave={async (server, browser) => {
         try {
-          const saved = await api.saveSettings(server);
+          const saved = await api.saveSettings({
+            ...server,
+            auto_submit: browser.autoSubmit,
+            auto_next: browser.autoNext,
+            arrow_keys: browser.arrowKeys,
+          });
           setMeta({ ...meta, settings: saved });
-          setBrowserSettings(browser);
-          localStorage.setItem(BROWSER_SETTINGS_KEY, JSON.stringify(browser));
+          setBrowserSettings(browserSettingsFromServer(saved));
           setShowSettings(false);
           notify("设置已保存");
         } catch (error) {
           notify(error instanceof Error ? error.message : "保存设置失败");
         }
       }} />}
-      <div className="version-bar">
-		<span>QuizDock v{meta?.version || "…"}</span>
-		{updates?.application.update_available
-		  ? <a href={updates.application.release_url} target="_blank" rel="noreferrer">下载 v{updates.application.latest_version}</a>
-		  : <button onClick={() => void checkUpdates()} disabled={checkingUpdates}>{checkingUpdates ? "正在检查…" : "检查更新"}</button>}
-		{auth?.enabled && <button onClick={async () => { await api.logout(); setAuth({ ...auth, authenticated: false }); setMeta(null); }}>{auth.username} · 退出</button>}
-	  </div>
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -623,33 +674,60 @@ function BankManager({ meta, updates, importing, checking, installing, onClose, 
   onToggle: (id: string, enabled: boolean) => Promise<void>;
   onRemove: (id: string, name: string) => Promise<void>;
 	onCheck: () => void;
-	onInstall: (slug: string) => Promise<void>;
+  onInstall: (slug: string) => Promise<void>;
 }) {
   return <div className="modal" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="dialog bank-dialog">
-      <div className="dialog-title"><div><p className="eyebrow">题库书架</p><h2>管理题库</h2></div><button className="round-button" onClick={onClose}>×</button></div>
-      <div className="bank-list">
-        {meta.banks.map((bank) => <article className="bank-row" key={bank.id}>
-          <div><h3>{bank.name}</h3><p>{bank.subject || bank.exam || "通用题库"} · {bank.question_count} 题 · v{bank.version}</p><small>{bank.id}{bank.license ? ` · ${bank.license}` : ""}</small></div>
-          <div className="bank-actions">
-            <label className="switch"><input type="checkbox" checked={bank.enabled} onChange={(event) => void onToggle(bank.id, event.target.checked)} /><i /></label>
-            <button className="danger-text" onClick={() => void onRemove(bank.id, bank.name)}>卸载</button>
-          </div>
-        </article>)}
-        {!meta.banks.length && <p className="empty-note">尚未导入题库。</p>}
+      <div className="dialog-title">
+        <div><p className="eyebrow">题库书架</p><h2>管理题库</h2><p>在一处安装官方题库、导入本地题库包，并管理已安装内容。</p></div>
+        <button className="round-button" aria-label="关闭题库管理" onClick={onClose}>×</button>
       </div>
-	  <div className="official-bank-list">
-		<div className="section-heading"><p className="eyebrow">官方题库</p><button className="text-button" disabled={checking} onClick={onCheck}>{checking ? "检查中…" : "检查更新"}</button></div>
-		{updates?.banks.map((bank) => <article className="bank-row official" key={bank.slug}>
-		  <div><h3>{bank.name}</h3><p>{bank.installed ? `已安装 v${bank.installed_version}` : "尚未安装"}{bank.latest_version ? ` · 最新 v${bank.latest_version}` : ""}</p><small>题库独立于 QuizDock 应用发布</small></div>
-		  <div className="bank-actions">
-			{bank.install_available && (!bank.installed || bank.update_available) && <button className="primary compact" disabled={Boolean(installing)} onClick={() => void onInstall(bank.slug)}>{installing === bank.slug ? "处理中…" : bank.installed ? "更新" : "安装"}</button>}
-			{!bank.install_available && <a className="text-link" href={bank.release_url} target="_blank" rel="noreferrer">发布页</a>}
-		  </div>
-		</article>)}
-		{!updates && <p className="empty-note">点击“检查更新”获取官方题库。</p>}
-	  </div>
-      <button className="primary wide" disabled={importing} onClick={onImport}>{importing ? "正在导入…" : "导入 .qbank"}</button>
+
+      <div className="bank-source-grid">
+        <section className="bank-source official-source">
+          <div className="source-heading">
+            <span className="source-icon">☁</span>
+            <div><h3>官方题库</h3><p>从 QuizDock 发布页直接安装，后续可自动发现更新。</p></div>
+            <button className="text-button" disabled={checking} onClick={onCheck}>{checking ? "检查中…" : "刷新"}</button>
+          </div>
+          <div className="source-content">
+            {updates?.banks.map((bank) => <article className="bank-row official" key={bank.slug}>
+              <div><h3>{bank.name}</h3><p>{bank.installed ? `已安装 v${bank.installed_version}` : "尚未安装"}{bank.latest_version ? ` · 最新 v${bank.latest_version}` : ""}</p><small>题库与 QuizDock 应用独立发布</small></div>
+              <div className="bank-actions">
+                {bank.install_available && (!bank.installed || bank.update_available) && <button className="primary compact" disabled={Boolean(installing)} onClick={() => void onInstall(bank.slug)}>{installing === bank.slug ? "处理中…" : bank.installed ? "更新" : "安装"}</button>}
+                {!bank.install_available && <a className="text-link" href={bank.release_url} target="_blank" rel="noreferrer">发布页</a>}
+              </div>
+            </article>)}
+            {!updates && <p className="empty-note">点击“刷新”获取可用的官方题库。</p>}
+          </div>
+        </section>
+
+        <section className="bank-source local-source">
+          <div className="source-heading">
+            <span className="source-icon">⇧</span>
+            <div><h3>本地题库</h3><p>选择由你自己保管或从其他渠道获取的 `.qbank` 文件。</p></div>
+          </div>
+          <div className="local-import-card">
+            <span>.qbank</span>
+            <p>题库会先经过结构与完整性校验，再事务化写入本地数据库。</p>
+            <button className="secondary" disabled={importing} onClick={onImport}>{importing ? "正在导入…" : "选择本地文件"}</button>
+          </div>
+        </section>
+      </div>
+
+      <section className="installed-banks">
+        <div className="section-heading"><div><p className="eyebrow">已安装</p><h3>{meta.banks.length ? `${meta.banks.length} 个题库` : "尚无题库"}</h3></div></div>
+        <div className="bank-list">
+          {meta.banks.map((bank) => <article className="bank-row" key={bank.id}>
+            <div><h3>{bank.name}</h3><p>{bank.subject || bank.exam || "通用题库"} · {bank.question_count} 题 · v{bank.version}</p><small>{bank.id}{bank.license ? ` · ${bank.license}` : ""}</small></div>
+            <div className="bank-actions">
+              <label className="switch" title={bank.enabled ? "已启用" : "已停用"}><input type="checkbox" checked={bank.enabled} onChange={(event) => void onToggle(bank.id, event.target.checked)} /><i /></label>
+              <button className="danger-text" onClick={() => void onRemove(bank.id, bank.name)}>卸载</button>
+            </div>
+          </article>)}
+          {!meta.banks.length && <p className="empty-note">从上方安装官方题库，或选择一个本地题库文件。</p>}
+        </div>
+      </section>
     </section>
   </div>;
 }

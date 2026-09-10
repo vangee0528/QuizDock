@@ -77,3 +77,40 @@ func TestEmptyMetaUsesEmptyCollections(t *testing.T) {
 		t.Fatalf("empty metadata collections must not be nil: %#v", meta)
 	}
 }
+
+func TestSettingsPersistPracticePreferences(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "quizdock.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := store.Settings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.AutoSubmit || settings.AutoNext || !settings.ArrowKeys {
+		t.Fatalf("unexpected practice preference defaults: %#v", settings)
+	}
+	settings.AutoSubmit = true
+	settings.AutoNext = true
+	settings.ArrowKeys = false
+	if err := store.SaveSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	persisted, err := reopened.Settings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.AutoSubmit || !persisted.AutoNext || persisted.ArrowKeys {
+		t.Fatalf("practice preferences were not persisted: %#v", persisted)
+	}
+}

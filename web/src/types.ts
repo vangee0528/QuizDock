@@ -22,6 +22,9 @@ export interface Settings {
   daily_target: number;
   required_streak: number;
   ai_url: string;
+  auto_submit: boolean;
+  auto_next: boolean;
+  arrow_keys: boolean;
 }
 
 export interface Meta {

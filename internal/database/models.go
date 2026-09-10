@@ -66,6 +66,9 @@ type Settings struct {
 	DailyTarget    int    `json:"daily_target"`
 	RequiredStreak int    `json:"required_streak"`
 	AIURL          string `json:"ai_url"`
+	AutoSubmit     bool   `json:"auto_submit"`
+	AutoNext       bool   `json:"auto_next"`
+	ArrowKeys      bool   `json:"arrow_keys"`
 }
 
 type Stats struct {

@@ -14,8 +14,10 @@ import (
 
 func (s *Store) Settings(ctx context.Context) (Settings, error) {
 	var settings Settings
-	err := s.db.QueryRowContext(ctx, "SELECT track_wrong,daily_target,required_streak,ai_url FROM app_settings WHERE id=1").
-		Scan(&settings.TrackWrong, &settings.DailyTarget, &settings.RequiredStreak, &settings.AIURL)
+	err := s.db.QueryRowContext(ctx, `SELECT track_wrong,daily_target,required_streak,ai_url,
+		auto_submit,auto_next,arrow_keys FROM app_settings WHERE id=1`).
+		Scan(&settings.TrackWrong, &settings.DailyTarget, &settings.RequiredStreak, &settings.AIURL,
+			&settings.AutoSubmit, &settings.AutoNext, &settings.ArrowKeys)
 	return settings, err
 }
 
@@ -29,8 +31,10 @@ func (s *Store) SaveSettings(ctx context.Context, settings Settings) error {
 	if !strings.HasPrefix(settings.AIURL, "https://") && !strings.HasPrefix(settings.AIURL, "http://") {
 		return fmt.Errorf("ai_url must use http or https")
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE app_settings SET track_wrong=?,daily_target=?,required_streak=?,ai_url=?,updated_at=? WHERE id=1`,
-		boolInt(settings.TrackWrong), settings.DailyTarget, settings.RequiredStreak, settings.AIURL, now())
+	_, err := s.db.ExecContext(ctx, `UPDATE app_settings SET track_wrong=?,daily_target=?,required_streak=?,ai_url=?,
+		auto_submit=?,auto_next=?,arrow_keys=?,updated_at=? WHERE id=1`,
+		boolInt(settings.TrackWrong), settings.DailyTarget, settings.RequiredStreak, settings.AIURL,
+		boolInt(settings.AutoSubmit), boolInt(settings.AutoNext), boolInt(settings.ArrowKeys), now())
 	return err
 }
 
