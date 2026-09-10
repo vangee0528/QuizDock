@@ -26,6 +26,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/quizdock/quizdock/internal/database"
 	"github.com/quizdock/quizdock/internal/qbank"
+	"github.com/quizdock/quizdock/internal/releases"
 	"github.com/quizdock/quizdock/internal/webui"
 )
 
@@ -36,30 +37,60 @@ type Server struct {
 	version     string
 	dataDir     string
 	webDevURL   string
+	auth        *authManager
+	releases    *releases.Client
 	importMutex sync.Mutex
 }
 
+type Options struct {
+	Version       string
+	DataDir       string
+	WebDevURL     string
+	AuthUsername  string
+	AuthPassword  string
+	ReleaseClient *releases.Client
+}
+
 func New(store *database.Store, version, dataDir, webDevURL string) http.Handler {
-	server := &Server{store: store, version: version, dataDir: dataDir, webDevURL: webDevURL}
+	return NewWithOptions(store, Options{Version: version, DataDir: dataDir, WebDevURL: webDevURL})
+}
+
+func NewWithOptions(store *database.Store, options Options) http.Handler {
+	releaseClient := options.ReleaseClient
+	if releaseClient == nil {
+		releaseClient = releases.NewClient("", "", nil)
+	}
+	server := &Server{
+		store: store, version: options.Version, dataDir: options.DataDir, webDevURL: options.WebDevURL,
+		auth: newAuthManager(options.AuthUsername, options.AuthPassword), releases: releaseClient,
+	}
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
 	router.Use(server.loggingMiddleware)
 	router.Route("/api/v1", func(api chi.Router) {
 		api.Get("/health", server.health)
-		api.Get("/meta", server.meta)
-		api.Get("/banks", server.banks)
-		api.Post("/banks/import", server.importBank)
-		api.Put("/banks/{bankID}/enabled", server.setBankEnabled)
-		api.Delete("/banks/{bankID}", server.removeBank)
-		api.Get("/questions", server.questions)
-		api.Get("/questions/{uid}", server.question)
-		api.Post("/answers", server.answer)
-		api.Get("/progress", server.progress)
-		api.Put("/progress", server.saveProgress)
-		api.Put("/questions/{uid}/state", server.setQuestionState)
-		api.Get("/settings", server.settings)
-		api.Put("/settings", server.saveSettings)
-		api.Get("/assets/{bankID}/*", server.asset)
+		api.Get("/auth/status", server.authStatus)
+		api.Post("/auth/login", server.login)
+		api.Post("/auth/logout", server.logout)
+		api.Group(func(protected chi.Router) {
+			protected.Use(server.requireAuth)
+			protected.Get("/meta", server.meta)
+			protected.Get("/updates", server.updates)
+			protected.Get("/banks", server.banks)
+			protected.Post("/banks/import", server.importBank)
+			protected.Post("/official-banks/{slug}/install", server.installOfficialBank)
+			protected.Put("/banks/{bankID}/enabled", server.setBankEnabled)
+			protected.Delete("/banks/{bankID}", server.removeBank)
+			protected.Get("/questions", server.questions)
+			protected.Get("/questions/{uid}", server.question)
+			protected.Post("/answers", server.answer)
+			protected.Get("/progress", server.progress)
+			protected.Put("/progress", server.saveProgress)
+			protected.Put("/questions/{uid}/state", server.setQuestionState)
+			protected.Get("/settings", server.settings)
+			protected.Put("/settings", server.saveSettings)
+			protected.Get("/assets/{bankID}/*", server.asset)
+		})
 		api.NotFound(func(writer http.ResponseWriter, _ *http.Request) {
 			writeError(writer, http.StatusNotFound, "API 资源不存在")
 		})
@@ -69,6 +100,55 @@ func New(store *database.Store, version, dataDir, webDevURL string) http.Handler
 	})
 	router.NotFound(server.frontend)
 	return router
+}
+
+func (s *Server) requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !s.auth.authenticated(request) {
+			writeError(writer, http.StatusUnauthorized, "请先登录")
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
+}
+
+func (s *Server) authStatus(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"enabled": s.auth.enabled(), "authenticated": s.auth.authenticated(request), "username": s.auth.username,
+	})
+}
+
+func (s *Server) login(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	var payload struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !decodeJSON(writer, request, &payload) {
+		return
+	}
+	if !s.auth.validCredentials(payload.Username, payload.Password) {
+		time.Sleep(300 * time.Millisecond)
+		writeError(writer, http.StatusUnauthorized, "用户名或密码错误")
+		return
+	}
+	token, err := s.auth.createSession()
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "无法创建登录会话")
+		return
+	}
+	setSessionCookie(writer, request, token)
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"enabled": true, "authenticated": true, "username": s.auth.username,
+	})
+}
+
+func (s *Server) logout(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	s.auth.removeSession(request)
+	clearSessionCookie(writer, request)
+	writeJSON(writer, http.StatusOK, map[string]bool{"logged_out": true})
 }
 
 func (s *Server) health(writer http.ResponseWriter, request *http.Request) {

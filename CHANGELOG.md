@@ -1,15 +1,30 @@
-# Changelog
+# 更新日志
 
-All notable changes are documented here. QuizDock follows Semantic Versioning.
+这里记录 QuizDock 的重要变化。应用遵循语义化版本。
+
+## [0.2.0] - 2026-09-10
+
+### 新增
+
+- 全新的 QuizDock 标志与浏览器 favicon。
+- 界面显示当前版本，并可检查应用更新。
+- 官方题库发现、安装和独立更新。
+- 可选的用户名、密码登录保护，适用于 VPS 部署。
+- 应用和题库使用互不绑定的发布标签与工作流。
+
+### 改进
+
+- 没有可用题库时，练习模式会引导用户安装或导入题库，不再进入空白页面。
+- 面向简体中文用户的项目文档统一为中文。
 
 ## [0.1.0] - 2026-09-10
 
-### Added
+### 新增
 
-- Importable `.qbank` archives with validation and transactional SQLite import.
-- Multiple installed question banks with enable, disable and removal controls.
-- Sequence, chapter, random, exam and wrong-answer review modes.
-- Persistent progress, attempts, favourites and spaced wrong-answer review.
-- Refresh-safe practice URLs and restored scroll position.
-- Docker, source-build and single-executable release workflows.
-- CLI commands for serving, importing, validating, inspecting and packing banks.
+- 带安全校验和 SQLite 事务导入的 `.qbank` 格式。
+- 多题库安装、启用、停用与卸载。
+- 顺序、章节、随机、真题及错题复习模式。
+- 持久化进度、答题记录、收藏和错题记忆。
+- 刷新后恢复练习 URL 与滚动位置。
+- Docker、源码构建和单可执行文件发布流程。
+- 题库导入、校验、查看和打包命令。

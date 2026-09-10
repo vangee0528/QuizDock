@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*.*.*"]
 
 permissions:
   contents: write
@@ -27,6 +27,10 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
+      - name: 解析应用版本
+        id: version
+        shell: bash
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -54,14 +58,4 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.docker-meta.outputs.tags }}
           labels: ${{ steps.docker-meta.outputs.labels }}
-          build-args: VERSION=${{ github.ref_name }}
-      - name: Package optional software-designer bank
-        run: |
-          bank_version="${GITHUB_REF_NAME#v}"
-          go run ./cmd/quizdock bank pack banks/software-designer "software-designer-${bank_version}.qbank"
-      - name: Attach question bank to the GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          bank_version="${GITHUB_REF_NAME#v}"
-          gh release upload "$GITHUB_REF_NAME" "software-designer-${bank_version}.qbank" --clobber
+          build-args: VERSION=${{ steps.version.outputs.value }}

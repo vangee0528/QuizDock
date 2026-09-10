@@ -1,11 +1,21 @@
-# Contributing
+# 参与贡献
 
-Thank you for contributing to QuizDock.
+感谢你参与 QuizDock。程序问题、功能建议和题目勘误都可以提交 Issue；能够直接修复的问题也欢迎提交 PR。
 
-1. Create a focused branch from `main`.
-2. Run `make setup` once and `make check` before submitting a change.
-3. Add tests for parser, database or interaction changes.
-4. Keep application changes independent from proprietary question-bank content.
-5. Update `CHANGELOG.md` for user-visible changes.
+## 应用代码
 
-Question-bank format changes require a new `schema_version` and a migration/compatibility note. Database schema changes must be added as a new numbered migration; existing migrations are immutable after release.
+1. 从 `main` 创建目标明确的分支。
+2. 首次开发运行 `make setup`，提交前运行 `make check`。
+3. 解析器、数据库或交互逻辑的改动应补充测试。
+4. 面向简体中文用户的界面和文档使用中文。
+5. 用户可见的变化写入 `CHANGELOG.md`。
+
+数据库结构变化必须新增编号迁移文件，已发布的迁移文件不得修改。题库格式的不兼容变化需要提高 `schema_version`，并说明迁移和兼容策略。
+
+## 题目勘误
+
+提交 Issue 时请写明题库、题目 ID（例如 `q-000555`）、问题内容和建议修改。提交 PR 时直接修改 `banks/<题库>/questions/` 下对应 Markdown；如涉及图片，请同时更新 `assets/`。
+
+题目 ID 和题库 ID 是用户学习记录的稳定标识。修正原题时不得改 ID，也不要把已有 ID 分配给其他题目。
+
+勘误合并后，维护者只需提高该题库 `manifest.json` 中的版本，并推送 `qbank/<题库目录名>/v<版本>` 标签，即可独立发布题库，无需升级 QuizDock 应用。

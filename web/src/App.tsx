@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "./api";
+import { api, APIError } from "./api";
 import { Markdown } from "./Markdown";
 import type {
-  AnswerResult, BrowserSettings, Filters, Meta, Mode, Question,
-  QuestionSummary, SessionSnapshot, Settings,
+  AnswerResult, AuthStatus, BrowserSettings, Filters, Meta, Mode, Question,
+  QuestionSummary, SessionSnapshot, Settings, UpdateCatalog,
 } from "./types";
 
 const SESSION_KEY = "quizdock.practice.v1";
@@ -85,7 +85,9 @@ function resultClass(value: boolean | null): string {
 }
 
 export function App() {
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [meta, setMeta] = useState<Meta | null>(null);
+  const [updates, setUpdates] = useState<UpdateCatalog | null>(null);
   const [mode, setMode] = useState<Mode>("sequence");
   const [filters, setFilters] = useState<Filters>({ banks: [] });
   const [queue, setQueue] = useState<QuestionSummary[]>([]);
@@ -99,6 +101,8 @@ export function App() {
   const [toast, setToast] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [showBanks, setShowBanks] = useState(false);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [installingBank, setInstallingBank] = useState("");
   const [navigatorCollapsed, setNavigatorCollapsed] = useState(window.innerWidth < 850);
   const [browserSettings, setBrowserSettings] = useState<BrowserSettings>(() => ({
     ...defaultBrowserSettings,
@@ -126,6 +130,25 @@ export function App() {
     });
     return value;
   }, []);
+
+  const checkUpdates = useCallback(async (announce = true) => {
+    setCheckingUpdates(true);
+    try {
+      const value = await api.updates(announce);
+	  setUpdates(value);
+	  if (announce) {
+	    const bankUpdates = value.banks.filter((bank) => bank.update_available).length;
+	    if (value.application.update_available || bankUpdates) notify(`发现 ${Number(value.application.update_available) + bankUpdates} 项更新`);
+	    else notify("应用和官方题库均为最新版本");
+	  }
+	  return value;
+    } catch (error) {
+	  if (announce) notify(error instanceof Error ? error.message : "检查更新失败");
+	  return null;
+    } finally {
+	  setCheckingUpdates(false);
+    }
+  }, [notify]);
 
   const saveSnapshot = useCallback((scrollY = window.scrollY) => {
     if (!question) return;
@@ -224,9 +247,15 @@ export function App() {
   }, [filters, meta, mode, notify, openQuestion]);
 
   useEffect(() => {
-    void refreshMeta().catch((error) => notify(error instanceof Error ? error.message : "初始化失败"))
-      .finally(() => setLoading(false));
-  }, [notify, refreshMeta]);
+    void api.authStatus().then((value) => {
+	  setAuth(value);
+	  if (!value.enabled || value.authenticated) {
+	    return refreshMeta().then(() => { void checkUpdates(false); });
+	  }
+	  return undefined;
+    }).catch((error) => notify(error instanceof Error ? error.message : "初始化失败"))
+	  .finally(() => setLoading(false));
+  }, [checkUpdates, notify, refreshMeta]);
 
   useEffect(() => {
     if (!meta || restoreStarted.current) return;
@@ -322,6 +351,20 @@ export function App() {
     }
   };
 
+  const installOfficialBank = async (slug: string) => {
+	setInstallingBank(slug);
+	try {
+	  const result = await api.installOfficialBank(slug);
+	  await refreshMeta();
+	  await checkUpdates(false);
+	  notify(`${result.updated ? "已更新" : "已安装"} ${result.name} v${result.version}，共 ${result.questions} 题`);
+	} catch (error) {
+	  notify(error instanceof Error ? error.message : "安装官方题库失败");
+	} finally {
+	  setInstallingBank("");
+	}
+  };
+
   const toggleBankSelection = (id: string) => {
     setFilters((current) => ({
       ...current,
@@ -369,6 +412,13 @@ export function App() {
   };
 
   const setModeAndClearFilters = (nextMode: Mode) => {
+	if (!meta?.banks.some((bank) => bank.enabled)) {
+	  setMode(nextMode);
+	  setQuestion(null); setQueue([]); setIndex(-1); history.replaceState(null, "", "/");
+	  notify("请先安装或导入题库");
+	  setShowBanks(true);
+	  return;
+	}
     setMode(nextMode);
     setFilters((current) => ({ banks: current.banks }));
   };
@@ -376,12 +426,26 @@ export function App() {
   const correctCount = useMemo(() => queue.filter((item) => item.last_correct === true).length, [queue]);
   const wrongCount = useMemo(() => queue.filter((item) => item.last_correct === false).length, [queue]);
 
+  if (auth?.enabled && !auth.authenticated) {
+	return <LoginScreen username={auth.username} onLogin={async (username, password) => {
+	  const next = await api.login(username, password);
+	  setAuth(next);
+	  setLoading(true);
+	  try {
+	    await refreshMeta();
+	    void checkUpdates(false);
+	  } finally {
+	    setLoading(false);
+	  }
+	}} />;
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">Q</div>
-          <div><strong>QuizDock</strong><span>Local question banks</span></div>
+          <img className="brand-mark" src="/favicon.svg" alt="QuizDock 标志" />
+          <div><strong>QuizDock</strong><span>本地题库刷题工具 · v{meta?.version || "…"}</span></div>
         </div>
 
         <section className="side-section overview">
@@ -416,9 +480,9 @@ export function App() {
               </button>
             ))}
           </div>
-          {mode === "chapter" && <select value={filters.chapter || ""} onChange={(event) => setFilters({ ...filters, chapter: event.target.value || undefined })}><option value="">选择章节</option>{meta?.chapters.map((value) => <option key={value}>{value}</option>)}</select>}
-          {mode === "random" && <select value={filters.tag || ""} onChange={(event) => setFilters({ ...filters, tag: event.target.value || undefined })}><option value="">选择 Tag</option>{meta?.tags.map((value) => <option key={value}>{value}</option>)}</select>}
-          {mode === "exam" && <select value={filters.exam || ""} onChange={(event) => setFilters({ ...filters, exam: event.target.value || undefined })}><option value="">选择真题试卷</option>{meta?.exams.map((value) => <option key={value}>{value}</option>)}</select>}
+          {mode === "chapter" && <select value={filters.chapter || ""} onChange={(event) => setFilters({ ...filters, chapter: event.target.value || undefined })}><option value="">选择章节</option>{meta?.chapters?.map((value) => <option key={value}>{value}</option>)}</select>}
+          {mode === "random" && <select value={filters.tag || ""} onChange={(event) => setFilters({ ...filters, tag: event.target.value || undefined })}><option value="">选择 Tag</option>{meta?.tags?.map((value) => <option key={value}>{value}</option>)}</select>}
+          {mode === "exam" && <select value={filters.exam || ""} onChange={(event) => setFilters({ ...filters, exam: event.target.value || undefined })}><option value="">选择真题试卷</option>{meta?.exams?.map((value) => <option key={value}>{value}</option>)}</select>}
           <button className="primary wide" onClick={() => void startPractice()} disabled={loading || !meta?.banks.length}>继续练习</button>
         </section>
 
@@ -450,7 +514,7 @@ export function App() {
             <p className="eyebrow">{meta?.banks.length ? "题库已就绪" : "从题库包开始"}</p>
             <h2>{meta?.banks.length ? "选择一种模式，继续你的学习进度" : "导入一个 .qbank 题库开始练习"}</h2>
             <p>题库与应用独立更新。所有题目、进度、收藏和错题记录都保存在本地 SQLite 数据库中。</p>
-            <button className="primary" onClick={() => meta?.banks.length ? void startPractice() : fileInput.current?.click()}>{meta?.banks.length ? "开始练习" : "选择题库包"}</button>
+            <button className="primary" onClick={() => meta?.banks.length ? void startPractice() : setShowBanks(true)}>{meta?.banks.length ? "开始练习" : "安装或导入题库"}</button>
           </section>
         )}
 
@@ -519,7 +583,11 @@ export function App() {
         </section>
       )}
 
-      {showBanks && meta && <BankManager meta={meta} importing={importing} onClose={() => setShowBanks(false)} onImport={() => fileInput.current?.click()} onToggle={toggleBankEnabled} onRemove={removeBank} />}
+      {showBanks && meta && <BankManager
+		meta={meta} updates={updates} importing={importing} checking={checkingUpdates} installing={installingBank}
+		onClose={() => setShowBanks(false)} onImport={() => fileInput.current?.click()} onToggle={toggleBankEnabled}
+		onRemove={removeBank} onCheck={() => void checkUpdates()} onInstall={installOfficialBank}
+	  />}
       {showSettings && meta && <SettingsDialog server={meta.settings} browser={browserSettings} onClose={() => setShowSettings(false)} onSave={async (server, browser) => {
         try {
           const saved = await api.saveSettings(server);
@@ -532,18 +600,30 @@ export function App() {
           notify(error instanceof Error ? error.message : "保存设置失败");
         }
       }} />}
+      <div className="version-bar">
+		<span>QuizDock v{meta?.version || "…"}</span>
+		{updates?.application.update_available
+		  ? <a href={updates.application.release_url} target="_blank" rel="noreferrer">下载 v{updates.application.latest_version}</a>
+		  : <button onClick={() => void checkUpdates()} disabled={checkingUpdates}>{checkingUpdates ? "正在检查…" : "检查更新"}</button>}
+		{auth?.enabled && <button onClick={async () => { await api.logout(); setAuth({ ...auth, authenticated: false }); setMeta(null); }}>{auth.username} · 退出</button>}
+	  </div>
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
 }
 
-function BankManager({ meta, importing, onClose, onImport, onToggle, onRemove }: {
+function BankManager({ meta, updates, importing, checking, installing, onClose, onImport, onToggle, onRemove, onCheck, onInstall }: {
   meta: Meta;
+  updates: UpdateCatalog | null;
   importing: boolean;
+  checking: boolean;
+  installing: string;
   onClose: () => void;
   onImport: () => void;
   onToggle: (id: string, enabled: boolean) => Promise<void>;
   onRemove: (id: string, name: string) => Promise<void>;
+	onCheck: () => void;
+	onInstall: (slug: string) => Promise<void>;
 }) {
   return <div className="modal" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="dialog bank-dialog">
@@ -558,9 +638,44 @@ function BankManager({ meta, importing, onClose, onImport, onToggle, onRemove }:
         </article>)}
         {!meta.banks.length && <p className="empty-note">尚未导入题库。</p>}
       </div>
+	  <div className="official-bank-list">
+		<div className="section-heading"><p className="eyebrow">官方题库</p><button className="text-button" disabled={checking} onClick={onCheck}>{checking ? "检查中…" : "检查更新"}</button></div>
+		{updates?.banks.map((bank) => <article className="bank-row official" key={bank.slug}>
+		  <div><h3>{bank.name}</h3><p>{bank.installed ? `已安装 v${bank.installed_version}` : "尚未安装"}{bank.latest_version ? ` · 最新 v${bank.latest_version}` : ""}</p><small>题库独立于 QuizDock 应用发布</small></div>
+		  <div className="bank-actions">
+			{bank.install_available && (!bank.installed || bank.update_available) && <button className="primary compact" disabled={Boolean(installing)} onClick={() => void onInstall(bank.slug)}>{installing === bank.slug ? "处理中…" : bank.installed ? "更新" : "安装"}</button>}
+			{!bank.install_available && <a className="text-link" href={bank.release_url} target="_blank" rel="noreferrer">发布页</a>}
+		  </div>
+		</article>)}
+		{!updates && <p className="empty-note">点击“检查更新”获取官方题库。</p>}
+	  </div>
       <button className="primary wide" disabled={importing} onClick={onImport}>{importing ? "正在导入…" : "导入 .qbank"}</button>
     </section>
   </div>;
+}
+
+function LoginScreen({ username, onLogin }: { username: string; onLogin: (username: string, password: string) => Promise<void> }) {
+  const [user, setUser] = useState(username || "admin");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  return <main className="login-screen">
+	<section className="login-card">
+	  <img src="/favicon.svg" alt="QuizDock 标志" />
+	  <p className="eyebrow">安全访问</p><h1>登录 QuizDock</h1><p>请输入部署时配置的账号和密码。</p>
+	  <form onSubmit={async (event) => {
+		event.preventDefault(); setSubmitting(true); setError("");
+		try { await onLogin(user, password); }
+		catch (reason) { setError(reason instanceof APIError ? reason.message : "登录失败"); }
+		finally { setSubmitting(false); }
+	  }}>
+		<label><span>用户名</span><input autoComplete="username" value={user} onChange={(event) => setUser(event.target.value)} /></label>
+		<label><span>密码</span><input autoFocus type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+		{error && <p className="login-error">{error}</p>}
+		<button className="primary wide" disabled={submitting}>{submitting ? "正在登录…" : "登录"}</button>
+	  </form>
+	</section>
+  </main>;
 }
 
 function SettingsDialog({ server, browser, onClose, onSave }: {

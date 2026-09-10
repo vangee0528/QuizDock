@@ -1,0 +1,39 @@
+name: 程序问题
+description: 报告 QuizDock 的功能或界面异常
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: QuizDock 版本
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: 运行方式
+      options:
+        - 预编译可执行文件
+        - Docker
+        - 源码运行
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      render: shell

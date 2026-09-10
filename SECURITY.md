@@ -1,7 +1,9 @@
-# Security policy
+# 安全策略
 
-Security fixes are supported for the latest QuizDock release.
+QuizDock 为最新版本提供安全修复。请先私下联系仓库维护者报告漏洞，确认修复方案后再公开细节。
 
-Do not include private question banks, tokens, browsing profiles or production databases in bug reports. Report vulnerabilities privately to the repository maintainer before public disclosure.
+请勿在 Issue 中附带私有题库、访问令牌、浏览器配置、生产数据库或真实密码。
 
-The `.qbank` importer limits archive size, expanded size, entry count and individual files; rejects traversal paths, symlinks, encrypted entries, duplicate paths and unsupported assets; verifies SHA-256 checksums; and imports in one SQLite transaction.
+`.qbank` 导入器限制压缩包大小、解压后大小、条目数量和单文件大小；拒绝路径穿越、符号链接、加密条目、重复路径和不支持的资源；校验 SHA-256，并在一个 SQLite 事务中完成导入。
+
+VPS 登录功能仅保护 QuizDock 应用层。公网部署仍应使用 HTTPS、强密码、防火墙和及时更新的反向代理。登录会话在服务重启后失效，这是当前版本的安全设计。

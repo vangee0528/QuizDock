@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -48,7 +49,7 @@ func run(args []string) error {
 		printUsage()
 		return nil
 	default:
-		return fmt.Errorf("unknown command %q; run quizdock help", args[0])
+		return fmt.Errorf("未知命令 %q；请运行 quizdock help 查看帮助", args[0])
 	}
 }
 
@@ -58,13 +59,29 @@ func serve(args []string) error {
 		return err
 	}
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
-	host := flags.String("host", "127.0.0.1", "HTTP listen address")
-	port := flags.Int("port", 8765, "HTTP listen port")
-	dataDir := flags.String("data-dir", defaults, "persistent data directory")
-	noBrowser := flags.Bool("no-browser", false, "do not open the browser")
-	webDevURL := flags.String("web-dev-url", "", "proxy frontend requests to a Vite development server")
+	host := flags.String("host", "127.0.0.1", "HTTP 监听地址")
+	port := flags.Int("port", 8765, "HTTP 监听端口")
+	dataDir := flags.String("data-dir", defaults, "持久化数据目录")
+	noBrowser := flags.Bool("no-browser", false, "启动时不打开浏览器")
+	webDevURL := flags.String("web-dev-url", "", "将前端请求代理到 Vite 开发服务器")
+	authUser := flags.String("auth-user", os.Getenv("QUIZDOCK_AUTH_USER"), "登录用户名；设置密码后默认为 admin")
+	authPasswordFile := flags.String("auth-password-file", os.Getenv("QUIZDOCK_AUTH_PASSWORD_FILE"), "从文件读取登录密码")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	authPassword := os.Getenv("QUIZDOCK_AUTH_PASSWORD")
+	if *authPasswordFile != "" {
+		if authPassword != "" {
+			return fmt.Errorf("QUIZDOCK_AUTH_PASSWORD 与 --auth-password-file 不能同时使用")
+		}
+		content, err := os.ReadFile(*authPasswordFile)
+		if err != nil {
+			return fmt.Errorf("读取登录密码文件：%w", err)
+		}
+		authPassword = strings.TrimRight(string(content), "\r\n")
+	}
+	if authPassword != "" && *authUser == "" {
+		*authUser = "admin"
 	}
 	databasePath := filepath.Join(*dataDir, "quizdock.db")
 	store, err := database.Open(databasePath)
@@ -74,7 +91,10 @@ func serve(args []string) error {
 	defer store.Close()
 	address := net.JoinHostPort(*host, fmt.Sprintf("%d", *port))
 	server := &http.Server{
-		Addr: address, Handler: api.New(store, version, *dataDir, *webDevURL),
+		Addr: address, Handler: api.NewWithOptions(store, api.Options{
+			Version: version, DataDir: *dataDir, WebDevURL: *webDevURL,
+			AuthUsername: *authUser, AuthPassword: authPassword,
+		}),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Minute,
 		WriteTimeout: 10 * time.Minute, IdleTimeout: 90 * time.Second,
 	}
@@ -110,12 +130,12 @@ func serve(args []string) error {
 
 func bankCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("bank command requires validate, inspect, import or pack")
+		return fmt.Errorf("bank 命令需要指定 validate、inspect、import 或 pack")
 	}
 	switch args[0] {
 	case "validate", "inspect":
 		if len(args) != 2 {
-			return fmt.Errorf("usage: quizdock bank %s FILE.qbank", args[0])
+			return fmt.Errorf("用法：quizdock bank %s 文件.qbank", args[0])
 		}
 		pkg, err := qbank.Load(args[1])
 		if err != nil {
@@ -129,7 +149,7 @@ func bankCommand(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(summary)
 	case "pack":
 		if len(args) != 3 {
-			return fmt.Errorf("usage: quizdock bank pack DIRECTORY OUTPUT.qbank")
+			return fmt.Errorf("用法：quizdock bank pack 题库目录 输出文件.qbank")
 		}
 		summary, err := qbank.Pack(args[1], args[2])
 		if err != nil {
@@ -143,12 +163,12 @@ func bankCommand(args []string) error {
 			return err
 		}
 		flags := flag.NewFlagSet("bank import", flag.ContinueOnError)
-		dataDir := flags.String("data-dir", defaults, "persistent data directory")
+		dataDir := flags.String("data-dir", defaults, "持久化数据目录")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		if flags.NArg() != 1 {
-			return fmt.Errorf("usage: quizdock bank import [--data-dir DIR] FILE.qbank")
+			return fmt.Errorf("用法：quizdock bank import [--data-dir 目录] 文件.qbank")
 		}
 		pkg, err := qbank.Load(flags.Arg(0))
 		if err != nil {
@@ -165,7 +185,7 @@ func bankCommand(args []string) error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(result)
 	default:
-		return fmt.Errorf("unknown bank command %q", args[0])
+		return fmt.Errorf("未知的 bank 命令 %q", args[0])
 	}
 }
 
@@ -183,10 +203,10 @@ func openBrowser(url string) error {
 }
 
 func printUsage() {
-	fmt.Println(`QuizDock - local-first practice with importable question banks
+	fmt.Println(`QuizDock - 本地优先、支持可导入题库的刷题工具
 
-Usage:
-  quizdock serve [options]
+用法：
+  quizdock serve [选项]
   quizdock bank validate FILE.qbank
   quizdock bank inspect FILE.qbank
   quizdock bank pack DIRECTORY OUTPUT.qbank

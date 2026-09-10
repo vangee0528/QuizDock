@@ -1,10 +1,11 @@
 [Unit]
-Description=QuizDock local question-bank service
+Description=QuizDock 本地题库服务
 After=network.target
 
 [Service]
 Type=simple
 ExecStart=%h/.local/bin/quizdock serve --host 127.0.0.1 --port 8765 --no-browser
+EnvironmentFile=-%h/.config/quizdock/quizdock.env
 Restart=on-failure
 RestartSec=3
 Environment=QUIZDOCK_DATA_DIR=%h/.local/share/quizdock

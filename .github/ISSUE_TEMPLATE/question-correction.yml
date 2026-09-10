@@ -1,0 +1,34 @@
+name: 题目勘误
+description: 报告题干、选项、答案、图片或格式问题
+title: "[题目勘误] "
+labels: ["题目勘误"]
+body:
+  - type: input
+    id: bank
+    attributes:
+      label: 题库
+      placeholder: 软件设计师题库
+    validations:
+      required: true
+  - type: input
+    id: question
+    attributes:
+      label: 题目 ID
+      description: 可在页面标题中查看，例如“数据库-q-000555”。
+      placeholder: q-000555
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 存在的问题
+      description: 请指出题干、选项、答案、图片或排版中的具体错误。
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 建议修改
+      description: 如有依据或参考资料，也请一并提供。
+    validations:
+      required: true

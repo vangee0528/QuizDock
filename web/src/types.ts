@@ -40,6 +40,40 @@ export interface Meta {
   settings: Settings;
 }
 
+export interface AuthStatus {
+  enabled: boolean;
+  authenticated: boolean;
+  username: string;
+}
+
+export interface ComponentUpdate {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  release_url: string;
+}
+
+export interface BankUpdate {
+  slug: string;
+  id: string;
+  name: string;
+  installed: boolean;
+  installed_version?: string;
+  latest_version?: string;
+  update_available: boolean;
+  install_available: boolean;
+  release_url: string;
+  asset_url?: string;
+  asset_size?: number;
+}
+
+export interface UpdateCatalog {
+  checked_at: string;
+  repository_url: string;
+  application: ComponentUpdate;
+  banks: BankUpdate[];
+}
+
 export interface QuestionSummary {
   uid: string;
   bank_id: string;

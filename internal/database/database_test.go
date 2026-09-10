@@ -62,3 +62,18 @@ func TestImportAndPracticePreserveLearningState(t *testing.T) {
 		t.Fatalf("learning state was not preserved: %#v", meta.Stats)
 	}
 }
+
+func TestEmptyMetaUsesEmptyCollections(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "quizdock.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	meta, err := store.Meta(context.Background(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Banks == nil || meta.Chapters == nil || meta.Tags == nil || meta.Exams == nil {
+		t.Fatalf("empty metadata collections must not be nil: %#v", meta)
+	}
+}

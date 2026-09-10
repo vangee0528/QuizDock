@@ -1,4 +1,13 @@
-import type { AnswerResult, Bank, Meta, Question, QuestionSummary, Settings } from "./types";
+import type {
+  AnswerResult, AuthStatus, Bank, Meta, Question, QuestionSummary, Settings, UpdateCatalog,
+} from "./types";
+
+export class APIError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "APIError";
+  }
+}
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
@@ -6,18 +15,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, { ...init, headers });
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json") ? await response.json() : null;
-  if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new APIError(response.status, payload?.error || `HTTP ${response.status}`);
   return payload as T;
 }
 
 export const api = {
+  authStatus: () => request<AuthStatus>("/api/v1/auth/status"),
+  login: (username: string, password: string) => request<AuthStatus>("/api/v1/auth/login", {
+    method: "POST", body: JSON.stringify({ username, password }),
+  }),
+  logout: () => request<{ logged_out: boolean }>("/api/v1/auth/logout", { method: "POST" }),
   meta: () => request<Meta>("/api/v1/meta"),
+  updates: (refresh = false) => request<UpdateCatalog>(`/api/v1/updates?refresh=${refresh}`),
   banks: () => request<{ banks: Bank[] }>("/api/v1/banks"),
   importBank: (file: File) => {
     const body = new FormData();
     body.append("bank", file);
     return request<{ name: string; version: string; questions: number }>("/api/v1/banks/import", { method: "POST", body });
   },
+  installOfficialBank: (slug: string) => request<{ name: string; version: string; questions: number; updated: boolean }>(
+    `/api/v1/official-banks/${encodeURIComponent(slug)}/install`, { method: "POST" },
+  ),
   enableBank: (id: string, enabled: boolean) => request(`/api/v1/banks/${encodeURIComponent(id)}/enabled`, {
     method: "PUT", body: JSON.stringify({ enabled }),
   }),

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="QuizDock">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#34785a"/>
+      <stop offset="1" stop-color="#214c39"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="3" width="58" height="58" rx="16" fill="url(#bg)"/>
+  <path d="M43.5 42.5A18 18 0 1 0 38 47l8 8 7-7-9.5-5.5ZM31 40a10 10 0 1 1 0-20 10 10 0 0 1 0 20Z" fill="#fffdf7"/>
+  <path d="M12 51h29" stroke="#e5b969" stroke-width="5" stroke-linecap="round"/>
+</svg>

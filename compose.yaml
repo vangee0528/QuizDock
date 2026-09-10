@@ -3,11 +3,14 @@ services:
     build:
       context: .
       args:
-        VERSION: 0.1.0
+        VERSION: 0.2.0
     ports:
       - "8765:8765"
     volumes:
       - quizdock-data:/data
+    environment:
+      QUIZDOCK_AUTH_USER: ${QUIZDOCK_AUTH_USER:-}
+      QUIZDOCK_AUTH_PASSWORD: ${QUIZDOCK_AUTH_PASSWORD:-}
     restart: unless-stopped
 
 volumes:

@@ -1,0 +1,53 @@
+name: 发布题库
+
+on:
+  push:
+    tags:
+      - "qbank/*/v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-bank:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 解析并校验题库版本
+        id: bank
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          remainder="${tag#qbank/}"
+          slug="${remainder%%/v*}"
+          version="${tag##*/v}"
+          directory="banks/${slug}"
+          test -d "$directory"
+          manifest_version="$(jq -r .version "$directory/manifest.json")"
+          name="$(jq -r .name "$directory/manifest.json")"
+          test "$manifest_version" = "$version"
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "directory=$directory" >> "$GITHUB_OUTPUT"
+      - name: 打包并校验题库
+        run: |
+          output="${{ steps.bank.outputs.slug }}-${{ steps.bank.outputs.version }}.qbank"
+          go run ./cmd/quizdock bank pack "${{ steps.bank.outputs.directory }}" "$output"
+          go run ./cmd/quizdock bank validate "$output"
+          sha256sum "$output" > "${output}.sha256"
+      - name: 创建题库 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          slug="${{ steps.bank.outputs.slug }}"
+          version="${{ steps.bank.outputs.version }}"
+          output="${slug}-${version}.qbank"
+          gh release create "$GITHUB_REF_NAME" "$output" "${output}.sha256" \
+            --title "${{ steps.bank.outputs.name }} v${version}" \
+            --generate-notes \
+            --latest=false

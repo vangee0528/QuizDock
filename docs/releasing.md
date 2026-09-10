@@ -1,29 +1,57 @@
-# Releasing QuizDock
+# 发布指南
 
-QuizDock uses Semantic Versioning. The application and the bundled optional question-bank artifact use the same version in v0.1.x; the `.qbank` manifest remains the authority for its own version.
+QuizDock 应用与题库相互独立地维护版本和发布，不要求同步升级。
 
-## Prepare
+## 发布应用
 
-1. Update `VERSION`, `web/package.json`, the bank `manifest.json` and `CHANGELOG.md`.
-2. Run `make check`.
-3. Build and validate the bank:
+应用使用标准 `v<主版本>.<次版本>.<修订版本>` 标签，例如 `v0.2.0`。
+
+1. 更新 `VERSION`、`web/package.json` 和 `CHANGELOG.md`。
+2. 运行 `make check`。
+3. 验证全新数据库启动、登录及至少一个题库导入。
+4. 提交并推送应用标签：
 
    ```bash
-   ./dist/quizdock bank pack banks/software-designer release/software-designer-0.1.0.qbank
-   ./dist/quizdock bank validate release/software-designer-0.1.0.qbank
+   git tag -a v0.2.0 -m "QuizDock v0.2.0"
+   git push origin main v0.2.0
    ```
 
-4. Test a clean import and verify that the application starts with an empty database.
+`.github/workflows/release.yml` 会构建 Linux、macOS 和 Windows 可执行文件，生成校验和，并发布 `linux/amd64`、`linux/arm64` Docker 镜像。应用 Release 不再重复打包题库。
 
-## Publish
+## 发布题库
 
-Create and push an annotated tag:
+题库标签格式为 `qbank/<banks 下的目录名>/v<题库版本>`，例如：
 
-```bash
-git tag -a v0.1.0 -m "QuizDock v0.1.0"
-git push origin main v0.1.0
+```text
+qbank/software-designer/v0.1.1
 ```
 
-The Release workflow performs GoReleaser cross-compilation, publishes the `linux/amd64` and `linux/arm64` container image, builds the `.qbank`, attaches it to the GitHub Release and emits SHA-256 checksums for executable archives.
+建议流程：
 
-Do not publish the optional question bank while its manifest licence is `Unspecified`; application-only releases can temporarily disable the two question-bank steps in the workflow.
+1. 通过 Issue 或 PR 确认并合并题目勘误。
+2. 保持题库 ID 和原题 ID 不变。
+3. 只提高该题库 `manifest.json` 的 `version`，不修改应用 `VERSION`。
+4. 在本地打包、校验并抽查导入：
+
+   ```bash
+   ./dist/quizdock bank pack banks/software-designer release/software-designer-0.1.1.qbank
+   ./dist/quizdock bank validate release/software-designer-0.1.1.qbank
+   ```
+
+5. 提交勘误和版本变化，然后推送题库标签：
+
+   ```bash
+   git tag -a qbank/software-designer/v0.1.1 -m "软件设计师题库 v0.1.1"
+   git push origin main qbank/software-designer/v0.1.1
+   ```
+
+`.github/workflows/qbank-release.yml` 会验证标签版本与清单一致，打包 `.qbank`，生成 SHA-256 文件，并创建独立的题库 Release。QuizDock 从这类 Release 中发现官方题库，不会把应用标签误认为题库版本。
+
+## 版本原则
+
+- 只改程序：仅提高应用版本。
+- 只勘误题目：仅提高对应题库版本。
+- 两者都有变化：分别提交并各自发布，可以使用不同版本号和发布时间。
+- `minimum_app_version` 只在题库确实需要较新的格式或功能时提高。
+
+题库发布前必须确认其内容许可证允许再分发。许可证为 `Unspecified` 时，工作流技术上仍可运行，但维护者不应公开发布产物。

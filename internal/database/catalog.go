@@ -98,7 +98,10 @@ func (s *Store) Meta(ctx context.Context, version string) (Meta, error) {
 	if err != nil {
 		return Meta{}, err
 	}
-	meta := Meta{Version: version, Banks: banks, Settings: settings}
+	meta := Meta{
+		Version: version, Banks: banks, Settings: settings,
+		Chapters: []string{}, Tags: []string{}, Exams: []string{},
+	}
 	meta.Chapters, err = s.distinctQuestionValues(ctx, "chapter")
 	if err != nil {
 		return Meta{}, err
