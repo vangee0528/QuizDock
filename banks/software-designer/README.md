@@ -1,16 +1,39 @@
-# 软件设计师题库
+# 软件设计师题库 (`cn.ruankao.software-designer`)
 
-这是随 QuizDock 仓库维护的软件设计师题库源，当前版本为 0.1.0。应用程序不会在编译时嵌入这些内容。推送 `qbank/software-designer/v0.1.0` 形式的独立标签后，题库发布工作流会将本目录打包为 `software-designer-0.1.0.qbank`，用户可按需安装或更新。
+本目录收录全国计算机技术与软件专业技术资格（水平）考试——**中级软件设计师**科目题库源文件。
+
+题库按 QuizDock 标准格式组织，当前包含 2,485 道历年真题及模拟练习题，覆盖计算机体系结构、操作系统、软件工程、面向对象与设计模式、数据库、计算机网络与信息安全、数据结构与算法、标准化与知识产权等核心知识领域。
+
+## 目录结构
+
+- `manifest.json`：题库清单元数据（题库标识、版本、科目分类、题目总数等）。
+- `questions/`：题目 Markdown 源文件，采用全局稳定标识（如 `q-000001.md`）。
+- `assets/`：题目所引用的拓扑图、电路图、UML 图等静态资源图片。
 
 ## 构建与校验
 
+可通过 QuizDock CLI 工具将源码目录打包为分发专用的 `.qbank` 归档文件：
+
 ```bash
-quizdock bank pack . ../../release/software-designer-0.1.0.qbank
-quizdock bank validate ../../release/software-designer-0.1.0.qbank
+# 从当前目录打包为 .qbank 文件
+quizdock bank pack . ../../dist/software-designer-0.1.0.qbank
+
+# 校验生成的题库包完整性与 SHA-256 校验和
+quizdock bank validate ../../dist/software-designer-0.1.0.qbank
 ```
 
-题卡已经移除采集平台名称、平台 URL、抓取时间、翻页地址、来源追溯字段、旧外部题号、`complete` 状态和带平台特征的资源名。内部题目 ID 会在后续版本中保持稳定。
+## 勘误与贡献
 
-## 内容许可
+欢迎协助完善题库质量！若在备考刷题中发现题干笔误、排版遗漏、选项错位或参考答案存疑，欢迎提交 Issue 或 Pull Request：
 
-题库内容许可目前标记为 `Unspecified`。在确认题目及图片的再分发权利并选择正式许可前，不应对外发布题库包。QuizDock 应用代码仍独立采用 MIT 许可证。
+1. **定位题目**：在 Web 界面中可直接查看题目 ID（例如 `q-000555`），在 `questions/` 目录下检索对应 Markdown 文件进行修正。
+2. **保持 ID 稳定**：题目 ID 是用户做题记录、收藏及错题本持久化的主键，勘误时**请勿修改已有的题目 ID**。
+3. **资源图片**：若涉及配图增补或修正，请统一放置于 `assets/` 目录并使用 Markdown 相对路径引用。
+
+## 版本与发布
+
+本题库遵循独立的语义化版本体系。题库勘误合并后，更新 `manifest.json` 中的 `version` 字段并推送对应 Git 标签（例如 `qbank/software-designer/v0.1.1`），GitHub Actions 即可自动完成校验、打包与发布。
+
+## 许可说明
+
+题库内容许可目前标记为 `Unspecified`。在确认题目及图片的再分发权利并选择正式许可前，不应对外发布题库包。QuizDock 应用代码独立使用 MIT 许可证。
