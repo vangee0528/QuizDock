@@ -1,0 +1,14 @@
+services:
+  quizdock:
+    build:
+      context: .
+      args:
+        VERSION: 0.1.0
+    ports:
+      - "8765:8765"
+    volumes:
+      - quizdock-data:/data
+    restart: unless-stopped
+
+volumes:
+  quizdock-data:

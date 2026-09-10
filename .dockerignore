@@ -1,0 +1,11 @@
+.git
+.github
+.private
+banks
+data
+dist
+release
+web/node_modules
+*.db
+*.qbank
+*.log

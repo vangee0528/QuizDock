@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "cn.ruankao.software-designer",
+  "name": "软件设计师题库",
+  "version": "0.1.0",
+  "locale": "zh-CN",
+  "exam": "计算机技术与软件专业技术资格考试",
+  "level": "中级",
+  "subject": "软件设计师",
+  "question_count": 2485,
+  "minimum_app_version": "0.1.0",
+  "license": "Unspecified",
+  "description": "软件设计师章节练习、历年真题与模拟练习。"
+}

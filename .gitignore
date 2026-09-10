@@ -1,0 +1,25 @@
+# Runtime data
+/data/
+/dist/
+/release/
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend dependencies (the production bundle is committed for Go embed)
+/web/node_modules/
+*.tsbuildinfo
+
+# Generated question-bank packages
+*.qbank
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local configuration
+quizdock.toml
+.env
+/.private/

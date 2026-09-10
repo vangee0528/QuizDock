@@ -1,0 +1,18 @@
+[Unit]
+Description=QuizDock local question-bank service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/quizdock serve --host 127.0.0.1 --port 8765 --no-browser
+Restart=on-failure
+RestartSec=3
+Environment=QUIZDOCK_DATA_DIR=%h/.local/share/quizdock
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/quizdock
+
+[Install]
+WantedBy=default.target
