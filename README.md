@@ -60,7 +60,7 @@ docker run -d \
   -p 8765:8765 \
   -v quizdock-data:/data \
   --restart unless-stopped \
-  ghcr.io/vangee0528/quizdock:0.2.2
+  ghcr.io/vangee0528/quizdock:0.3.0
 ```
 
 ### 源码编译与开发
