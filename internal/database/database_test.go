@@ -82,6 +82,47 @@ func TestEmptyMetaUsesEmptyCollections(t *testing.T) {
 	}
 }
 
+func TestAttemptStatsMigrationBackfillsHistory(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "quizdock.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ImportPackage(ctx, samplePackage()); err != nil {
+		t.Fatal(err)
+	}
+	uid := "example.bank:q-1"
+	if _, err := store.SubmitAnswer(ctx, uid, map[string][]string{"1": {"B"}}, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SubmitAnswer(ctx, uid, map[string][]string{"1": {"A"}}, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "DROP TABLE question_attempt_stats"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "DELETE FROM schema_migrations WHERE version=3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	meta, err := reopened.Meta(ctx, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Stats.Attempted != 1 || meta.Stats.Total != 1 || meta.Stats.Accuracy != 50 {
+		t.Fatalf("unexpected backfilled stats: %#v", meta.Stats)
+	}
+}
+
 func TestQuestionsLoadsMultipleDetailsInRequestedOrder(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "quizdock.db"))
 	if err != nil {

@@ -142,13 +142,13 @@ func loadStats(ctx context.Context, queryer rowQuerier) (Stats, error) {
 	var stats Stats
 	var correct, attempts int
 	err := queryer.QueryRowContext(ctx, `SELECT
-        COUNT(DISTINCT CASE WHEN a.id IS NOT NULL THEN q.uid END),
-        COUNT(a.id), COALESCE(SUM(a.correct),0),
-        COUNT(DISTINCT CASE WHEN m.status='mastered' THEN q.uid END),
-        COUNT(DISTINCT CASE WHEN m.status!='mastered' AND m.due_date<=? THEN q.uid END),
-        COUNT(DISTINCT q.uid)
+		COUNT(CASE WHEN a.attempt_count>0 THEN 1 END),
+		COALESCE(SUM(a.attempt_count),0), COALESCE(SUM(a.correct_count),0),
+		COUNT(CASE WHEN m.status='mastered' THEN 1 END),
+		COUNT(CASE WHEN m.status!='mastered' AND m.due_date<=? THEN 1 END),
+		COUNT(*)
       FROM questions q JOIN question_banks b ON b.id=q.bank_id
-      LEFT JOIN attempts a ON a.question_uid=q.uid
+	  LEFT JOIN question_attempt_stats a ON a.question_uid=q.uid
       LEFT JOIN question_mastery m ON m.question_uid=q.uid
       WHERE q.active=1 AND q.ready=1 AND b.installed=1 AND b.enabled=1`, today()).
 		Scan(&stats.Attempted, &attempts, &correct, &stats.Mastered, &stats.DueReviews, &stats.Total)

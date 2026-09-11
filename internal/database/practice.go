@@ -91,6 +91,11 @@ func (s *Store) SubmitAnswer(ctx context.Context, uid string, answers map[string
 	if _, err := tx.ExecContext(ctx, "INSERT INTO attempts(question_uid,answers_json,correct,duration_ms,created_at) VALUES(?,?,?,?,?)", uid, string(answersJSON), boolInt(correct), durationMS, now()); err != nil {
 		return AnswerResult{}, err
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO question_attempt_stats(question_uid,attempt_count,correct_count)
+		VALUES(?,1,?) ON CONFLICT(question_uid) DO UPDATE SET
+		attempt_count=attempt_count+1,correct_count=correct_count+excluded.correct_count`, uid, boolInt(correct)); err != nil {
+		return AnswerResult{}, err
+	}
 	var trackWrong bool
 	var requiredStreak int
 	if err := tx.QueryRowContext(ctx, "SELECT track_wrong,required_streak FROM app_settings WHERE id=1").Scan(&trackWrong, &requiredStreak); err != nil {
