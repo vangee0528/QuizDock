@@ -2,7 +2,7 @@
 
 本目录收录全国计算机技术与软件专业技术资格（水平）考试——**中级软件设计师**科目题库源文件。
 
-题库按 QuizDock 标准格式组织，当前包含 2,485 道历年真题及模拟练习题，覆盖计算机体系结构、操作系统、软件工程、面向对象与设计模式、数据库、计算机网络与信息安全、数据结构与算法、标准化与知识产权等核心知识领域。
+题库按 QuizDock 标准格式组织，当前包含 2,467 道历年真题及模拟练习题，覆盖计算机体系结构、操作系统、软件工程、面向对象与设计模式、数据库、计算机网络与信息安全、数据结构与算法、标准化与知识产权等核心知识领域。
 
 ## 目录结构
 
@@ -15,11 +15,14 @@
 可通过 QuizDock CLI 工具将源码目录打包为分发专用的 `.qbank` 归档文件：
 
 ```bash
+# 检查题目结构、答案引用、资源路径和敏感来源信息
+node tools/audit-qbank.mjs banks/software-designer
+
 # 从当前目录打包为 .qbank 文件
-quizdock bank pack . ../../dist/software-designer-0.1.0.qbank
+quizdock bank pack . ../../dist/software-designer-0.2.0.qbank
 
 # 校验生成的题库包完整性与 SHA-256 校验和
-quizdock bank validate ../../dist/software-designer-0.1.0.qbank
+quizdock bank validate ../../dist/software-designer-0.2.0.qbank
 ```
 
 ## 勘误与贡献
