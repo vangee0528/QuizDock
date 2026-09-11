@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, APIError } from "./api";
 import { Markdown } from "./Markdown";
+import { prefetchQuestionUIDs, preloadQuestionAssets, QuestionLoader } from "./question-loader";
 import type {
   AnswerResult, AuthStatus, BrowserSettings, Filters, Meta, Mode, Question,
   QueueItem, SessionSnapshot, Settings, UpdateCatalog,
 } from "./types";
 
 const SESSION_KEY = "quizdock.practice.v1";
+const RANDOM_QUEUE_KEY = "quizdock.practice-random-queue.v1";
 const BROWSER_SETTINGS_KEY = "quizdock.browser-settings.v1";
 
 const defaultBrowserSettings: BrowserSettings = {
@@ -39,6 +41,19 @@ function loadJSON<T>(key: string): T | null {
 function loadSession(): SessionSnapshot | null {
   try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null") as SessionSnapshot | null; }
   catch { return null; }
+}
+
+function loadRandomQueue(scope: string): string[] {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(RANDOM_QUEUE_KEY) || "null") as { scope?: string; uids?: string[] } | null;
+    return value?.scope === scope && Array.isArray(value.uids) ? value.uids : [];
+  } catch { return []; }
+}
+
+function saveRandomQueue(scope: string, queue: QueueItem[]): void {
+  try {
+    sessionStorage.setItem(RANDOM_QUEUE_KEY, JSON.stringify({ scope, uids: queue.map((item) => item.uid) }));
+  } catch { /* 浏览器空间不足时仍可继续当前练习，只是不恢复随机顺序。 */ }
 }
 
 function stableFilters(filters: Filters): Filters {
@@ -126,14 +141,47 @@ export function App() {
   const restoreStarted = useRef(false);
   const snapshot = useRef<SessionSnapshot | null>(null);
   const autoNextTimer = useRef<number | null>(null);
+  const progressTimer = useRef<number | null>(null);
+  const pendingProgress = useRef<object | null>(null);
+  const navigationRequest = useRef(0);
+  const questionLoader = useRef<QuestionLoader | null>(null);
+  if (questionLoader.current === null) {
+    questionLoader.current = new QuestionLoader(
+      api.question,
+      async (uids) => {
+        const questions = (await api.questionBatch(uids)).questions;
+        preloadQuestionAssets(questions);
+        return questions;
+      },
+    );
+  }
+
+  const prefetchFollowing = useCallback((targetQueue: QueueItem[], targetIndex: number) => {
+    const loader = questionLoader.current!;
+    const uids = prefetchQuestionUIDs(targetQueue, targetIndex, (uid) => loader.available(uid));
+    if (uids.length > 0) void loader.prefetch(uids);
+  }, []);
+
+  const flushProgress = useCallback((keepalive = false) => {
+    if (progressTimer.current !== null) window.clearTimeout(progressTimer.current);
+    progressTimer.current = null;
+    const payload = pendingProgress.current;
+    pendingProgress.current = null;
+    if (payload) void api.saveProgress(payload, keepalive).catch(() => undefined);
+  }, []);
+
+  const saveProgressSoon = useCallback((payload: object) => {
+    pendingProgress.current = payload;
+    if (progressTimer.current !== null) window.clearTimeout(progressTimer.current);
+    progressTimer.current = window.setTimeout(() => flushProgress(), 300);
+  }, [flushProgress]);
 
   const notify = useCallback((message: string) => {
     setToast(message);
     window.setTimeout(() => setToast((current) => current === message ? "" : current), 3000);
   }, []);
 
-  const refreshMeta = useCallback(async () => {
-    const value = await api.meta();
+  const applyMeta = useCallback(async (value: Meta) => {
     if (legacyBrowserSettings.current) {
       const legacy = legacyBrowserSettings.current;
       value.settings = await api.saveSettings({
@@ -156,6 +204,8 @@ export function App() {
     });
     return value;
   }, []);
+
+  const refreshMeta = useCallback(async () => applyMeta(await api.meta()), [applyMeta]);
 
   const checkUpdates = useCallback(async (announce = true) => {
     setCheckingUpdates(true);
@@ -182,7 +232,7 @@ export function App() {
       mode,
       filters: stableFilters(filters),
       currentUid: question.uid,
-      queueUids: queue.map((item) => item.uid),
+      queueUids: [],
       scrollY: Math.max(0, Math.round(scrollY)),
       navigatorCollapsed,
     };
@@ -202,9 +252,13 @@ export function App() {
       return;
     }
     if (autoNextTimer.current !== null) window.clearTimeout(autoNextTimer.current);
-    setLoading(true);
+    const requestID = ++navigationRequest.current;
+    const uid = targetQueue[targetIndex].uid;
+    const cached = questionLoader.current?.cached(uid);
+    setLoading(!cached);
     try {
-      const next = await api.question(targetQueue[targetIndex].uid);
+      const next = cached ?? await questionLoader.current!.load(uid);
+      if (requestID !== navigationRequest.current) return;
       setIndex(targetIndex);
       setQuestion(next);
       setSelections({});
@@ -213,7 +267,7 @@ export function App() {
       history.replaceState(null, "", practiceURL(targetMode, next.uid, targetFilters));
       const scope = scopeKey(targetMode, targetFilters);
       if (targetMode !== "random" && targetMode !== "review") {
-        void api.saveProgress({
+        saveProgressSoon({
           scope_key: scope, mode: targetMode, filters: stableFilters(targetFilters),
           current_uid: next.uid, current_index: targetIndex,
         });
@@ -221,12 +275,14 @@ export function App() {
       requestAnimationFrame(() => requestAnimationFrame(() => {
         window.scrollTo({ top: restoreScroll ?? 0, behavior: "auto" });
       }));
+      prefetchFollowing(targetQueue, targetIndex);
     } catch (error) {
+      if (requestID !== navigationRequest.current) return;
       notify(error instanceof Error ? error.message : "加载题目失败");
     } finally {
-      setLoading(false);
+      if (requestID === navigationRequest.current) setLoading(false);
     }
-  }, [filters, mode, notify, queue]);
+  }, [filters, mode, notify, prefetchFollowing, queue, saveProgressSoon]);
 
   const startPractice = useCallback(async (
     targetMode: Mode = mode,
@@ -240,6 +296,7 @@ export function App() {
     if (targetMode === "random" && !targetFilters.tag) return notify("请选择 Tag");
     if (targetMode === "exam" && !targetFilters.exam) return notify("请选择真题试卷");
     const saved = loadSession();
+    const requestID = ++navigationRequest.current;
     setNavigatorCollapsed(compactLayout() ? (restore ? saved?.navigatorCollapsed ?? true : true) : false);
     setPracticeStarting(true);
     setLoading(true);
@@ -250,11 +307,18 @@ export function App() {
         params.set("scope", scopeKey(targetMode, targetFilters));
       }
       const response = await api.startPractice(params);
+      if (requestID !== navigationRequest.current) return;
       let nextQueue = response.questions;
-      if (targetMode === "random" && restore && saved?.queueUids.length) {
-        const order = new Map(saved.queueUids.map((uid, position) => [uid, position]));
+      const practiceScope = scopeKey(targetMode, targetFilters);
+      let savedRandomQueue = targetMode === "random" && restore ? loadRandomQueue(practiceScope) : [];
+      if (savedRandomQueue.length === 0 && targetMode === "random" && restore) {
+        savedRandomQueue = saved?.queueUids || [];
+      }
+      if (savedRandomQueue.length) {
+        const order = new Map(savedRandomQueue.map((uid, position) => [uid, position]));
         nextQueue = [...nextQueue].sort((left, right) => (order.get(left.uid) ?? Number.MAX_SAFE_INTEGER) - (order.get(right.uid) ?? Number.MAX_SAFE_INTEGER));
       }
+      if (targetMode === "random") saveRandomQueue(practiceScope, nextQueue);
       setMode(targetMode);
       setFilters(stableFilters(targetFilters));
       setQueue(nextQueue);
@@ -267,6 +331,7 @@ export function App() {
       }
       const targetIndex = Math.max(0, nextQueue.findIndex((item) => item.uid === response.question?.uid));
       const next = response.question;
+      questionLoader.current?.seed(next);
       setIndex(targetIndex);
       setQuestion(next);
       setSelections({});
@@ -274,7 +339,7 @@ export function App() {
       setStartedAt(performance.now());
       history.replaceState(null, "", practiceURL(targetMode, next.uid, targetFilters));
       if (targetMode !== "random" && targetMode !== "review") {
-        void api.saveProgress({
+        saveProgressSoon({
           scope_key: scopeKey(targetMode, targetFilters), mode: targetMode,
           filters: stableFilters(targetFilters), current_uid: next.uid, current_index: targetIndex,
         });
@@ -282,24 +347,28 @@ export function App() {
       requestAnimationFrame(() => requestAnimationFrame(() => {
         window.scrollTo({ top: restore ? saved?.scrollY ?? 0 : 0, behavior: "auto" });
       }));
+      prefetchFollowing(nextQueue, targetIndex);
     } catch (error) {
+      if (requestID !== navigationRequest.current) return;
       notify(error instanceof Error ? error.message : "加载练习失败");
     } finally {
-      setPracticeStarting(false);
-      setLoading(false);
+      if (requestID === navigationRequest.current) {
+        setPracticeStarting(false);
+        setLoading(false);
+      }
     }
-  }, [filters, meta, mode, notify]);
+  }, [filters, meta, mode, notify, prefetchFollowing, saveProgressSoon]);
 
   useEffect(() => {
-    void api.authStatus().then((value) => {
-	  setAuth(value);
-	  if (!value.enabled || value.authenticated) {
-	    return refreshMeta().then(() => { void checkUpdates(false); });
+    void api.bootstrap().then((value) => {
+	  setAuth(value.auth);
+	  if (value.auth.authenticated && value.meta) {
+	    return applyMeta(value.meta).then(() => { void checkUpdates(false); });
 	  }
 	  return undefined;
     }).catch((error) => notify(error instanceof Error ? error.message : "初始化失败"))
 	  .finally(() => setLoading(false));
-  }, [checkUpdates, notify, refreshMeta]);
+  }, [applyMeta, checkUpdates, notify]);
 
   useEffect(() => {
     if (!meta || restoreStarted.current) return;
@@ -317,17 +386,30 @@ export function App() {
   }, [saveSnapshot]);
 
   useEffect(() => {
+    const flush = () => flushProgress(true);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flushProgress();
+    };
+  }, [flushProgress]);
+
+  useEffect(() => {
     let timer = 0;
     const onScroll = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => saveSnapshot(window.scrollY), 120);
     };
+    const onPageHide = () => {
+      window.clearTimeout(timer);
+      saveSnapshot(window.scrollY);
+    };
     window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("pagehide", onScroll);
+    window.addEventListener("pagehide", onPageHide);
     return () => {
       window.clearTimeout(timer);
       window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("pagehide", onScroll);
+      window.removeEventListener("pagehide", onPageHide);
     };
   }, [saveSnapshot]);
 
@@ -341,7 +423,7 @@ export function App() {
       const result = await api.answer(question.uid, answers, Math.round(performance.now() - startedAt));
       setAnswerResult(result);
       setQueue((current) => current.map((item, position) => position === index ? { ...item, last_correct: result.correct } : item));
-      void refreshMeta();
+      setMeta((current) => current ? { ...current, stats: result.stats } : current);
       if (result.correct && browserSettings.autoNext) {
         autoNextTimer.current = window.setTimeout(() => {
           void openQuestion(index + 1);
@@ -350,7 +432,7 @@ export function App() {
     } catch (error) {
       notify(error instanceof Error ? error.message : "提交失败");
     }
-  }, [answerResult, browserSettings.autoNext, index, notify, openQuestion, question, refreshMeta, selections, startedAt]);
+  }, [answerResult, browserSettings.autoNext, index, notify, openQuestion, question, selections, startedAt]);
 
   const selectOption = useCallback((part: number, label: string) => {
     if (!question || answerResult) return;
@@ -390,6 +472,7 @@ export function App() {
     setImporting(true);
     try {
       const result = await api.importBank(file);
+      questionLoader.current?.clear();
       await refreshMeta();
       notify(`已导入 ${result.name} ${result.version}，共 ${result.questions} 题`);
       setShowBanks(true);
@@ -405,6 +488,7 @@ export function App() {
 	setInstallingBank(slug);
 	try {
 	  const result = await api.installOfficialBank(slug);
+	  questionLoader.current?.clear();
 	  await refreshMeta();
 	  await checkUpdates(false);
 	  notify(`${result.updated ? "已更新" : "已安装"} ${result.name} v${result.version}，共 ${result.questions} 题`);
@@ -425,6 +509,7 @@ export function App() {
   const toggleBankEnabled = async (id: string, enabled: boolean) => {
     try {
       await api.enableBank(id, enabled);
+      questionLoader.current?.clear();
       await refreshMeta();
     } catch (error) {
       notify(error instanceof Error ? error.message : "更新题库失败");
@@ -435,6 +520,7 @@ export function App() {
     if (!window.confirm(`卸载“${name}”？答题记录和错题数据会保留。`)) return;
     try {
       await api.removeBank(id);
+      questionLoader.current?.clear();
       await refreshMeta();
       if (question?.bank_id === id) {
         setQuestion(null); setQueue([]); setIndex(-1); history.replaceState(null, "", "/");
@@ -475,6 +561,8 @@ export function App() {
 
   const leavePractice = () => {
     saveSnapshot();
+    flushProgress();
+    navigationRequest.current += 1;
     setPracticeStarting(false);
     setQuestion(null);
     setSelections({});
@@ -485,6 +573,7 @@ export function App() {
 
   const correctCount = useMemo(() => queue.filter((item) => item.last_correct === true).length, [queue]);
   const wrongCount = useMemo(() => queue.filter((item) => item.last_correct === false).length, [queue]);
+  const toggleNavigator = useCallback(() => setNavigatorCollapsed((current) => !current), []);
 
   if (auth?.enabled && !auth.authenticated) {
 	return <LoginScreen username={auth.username} onLogin={async (username, password) => {
@@ -577,7 +666,9 @@ export function App() {
               if (!question) return;
               const starred = !question.starred;
               await api.setStarred(question.uid, starred);
-              setQuestion({ ...question, starred });
+              const updated = { ...question, starred };
+              questionLoader.current?.seed(updated);
+              setQuestion(updated);
             }}>{question?.starred ? "★" : "☆"}</button>
           </div>
         </header>
@@ -597,17 +688,11 @@ export function App() {
 
         {question && !loading && (
           <div className="practice-layout">
-            {queue.length > 0 && (
-              <section className={`navigator-panel ${navigatorCollapsed ? "collapsed" : ""}`}>
-                <button className="navigator-heading" onClick={() => setNavigatorCollapsed(!navigatorCollapsed)}>
-                  <span><b>答题进度</b><small>{correctCount} 对 · {wrongCount} 错 · {queue.length - correctCount - wrongCount} 未答</small></span>
-                  <i>{navigatorCollapsed ? "⌃" : "⌄"}</i>
-                </button>
-                {!navigatorCollapsed && <div className="number-grid">{queue.map((item, position) => (
-                  <button key={item.uid} className={`number-button ${resultClass(item.last_correct)} ${position === index ? "current" : ""}`} title={item.title} onClick={() => void openQuestion(position)}>{position + 1}</button>
-                ))}</div>}
-              </section>
-            )}
+            {queue.length > 0 && <ProgressNavigator
+              queue={queue} index={index} collapsed={navigatorCollapsed}
+              correctCount={correctCount} wrongCount={wrongCount}
+              onToggle={toggleNavigator} onOpen={openQuestion}
+            />}
 
             <article className="question-card">
             <div className="tag-row">{question.tags.slice(0, 8).map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div>
@@ -685,6 +770,53 @@ export function App() {
     </div>
   );
 }
+
+const NAVIGATOR_PAGE_SIZE = 160;
+
+const ProgressNavigator = memo(function ProgressNavigator({
+  queue, index, collapsed, correctCount, wrongCount, onToggle, onOpen,
+}: {
+  queue: QueueItem[];
+  index: number;
+  collapsed: boolean;
+  correctCount: number;
+  wrongCount: number;
+  onToggle: () => void;
+  onOpen: (position: number) => void | Promise<void>;
+}) {
+  const currentPage = Math.floor(Math.max(0, index) / NAVIGATOR_PAGE_SIZE);
+  const pageCount = Math.max(1, Math.ceil(queue.length / NAVIGATOR_PAGE_SIZE));
+  const [page, setPage] = useState(currentPage);
+  useEffect(() => setPage(currentPage), [currentPage]);
+  useEffect(() => setPage((value) => Math.min(value, pageCount - 1)), [pageCount]);
+  const start = page * NAVIGATOR_PAGE_SIZE;
+  const visible = useMemo(() => queue.slice(start, start + NAVIGATOR_PAGE_SIZE), [queue, start]);
+
+  return <section className={`navigator-panel ${collapsed ? "collapsed" : ""}`}>
+    <button className="navigator-heading" onClick={onToggle}>
+      <span><b>答题进度</b><small>{correctCount} 对 · {wrongCount} 错 · {queue.length - correctCount - wrongCount} 未答</small></span>
+      <i>{collapsed ? "⌃" : "⌄"}</i>
+    </button>
+    {!collapsed && <>
+      {pageCount > 1 && <div className="navigator-pagination">
+        <button disabled={page === 0} aria-label="上一页题号" onClick={() => setPage((value) => value - 1)}>‹</button>
+        <select aria-label="题号范围" value={page} onChange={(event) => setPage(Number(event.target.value))}>
+          {Array.from({ length: pageCount }, (_, position) => {
+            const rangeStart = position * NAVIGATOR_PAGE_SIZE + 1;
+            const rangeEnd = Math.min((position + 1) * NAVIGATOR_PAGE_SIZE, queue.length);
+            return <option key={position} value={position}>{rangeStart}–{rangeEnd}</option>;
+          })}
+        </select>
+        <span>/ {queue.length}</span>
+        <button disabled={page === pageCount - 1} aria-label="下一页题号" onClick={() => setPage((value) => value + 1)}>›</button>
+      </div>}
+      <div className="number-grid">{visible.map((item, offset) => {
+        const position = start + offset;
+        return <button key={item.uid} className={`number-button ${resultClass(item.last_correct)} ${position === index ? "current" : ""}`} title={item.title} onClick={() => void onOpen(position)}>{position + 1}</button>;
+      })}</div>
+    </>}
+  </section>;
+});
 
 function BankManager({ meta, updates, importing, checking, installing, onClose, onImport, onToggle, onRemove, onCheck, onInstall }: {
   meta: Meta;

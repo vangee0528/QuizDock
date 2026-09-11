@@ -20,6 +20,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  bootstrap: () => request<{ auth: AuthStatus; meta?: Meta }>("/api/v1/bootstrap"),
   authStatus: () => request<AuthStatus>("/api/v1/auth/status"),
   login: (username: string, password: string) => request<AuthStatus>("/api/v1/auth/login", {
     method: "POST", body: JSON.stringify({ username, password }),
@@ -48,11 +49,16 @@ export const api = {
     question: Question | null;
   }>(`/api/v1/practice/start?${params}`),
   question: (uid: string) => request<Question>(`/api/v1/questions/${encodeURIComponent(uid)}`),
+  questionBatch: (uids: string[]) => request<{ questions: Question[] }>("/api/v1/questions/batch", {
+    method: "POST", body: JSON.stringify({ uids }),
+  }),
   answer: (uid: string, answers: Record<string, string[]>, durationMs: number) => request<AnswerResult>("/api/v1/answers", {
     method: "POST", body: JSON.stringify({ uid, answers, duration_ms: durationMs }),
   }),
   progress: (scope: string) => request<{ progress: { current_uid: string } | null }>(`/api/v1/progress?scope=${encodeURIComponent(scope)}`),
-  saveProgress: (payload: object) => request("/api/v1/progress", { method: "PUT", body: JSON.stringify(payload) }),
+  saveProgress: (payload: object, keepalive = false) => request("/api/v1/progress", {
+    method: "PUT", body: JSON.stringify(payload), keepalive,
+  }),
   setStarred: (uid: string, starred: boolean) => request(`/api/v1/questions/${encodeURIComponent(uid)}/state`, {
     method: "PUT", body: JSON.stringify({ starred }),
   }),

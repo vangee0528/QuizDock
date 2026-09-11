@@ -100,6 +100,7 @@ type AnswerResult struct {
 	CorrectAnswers map[string][]string       `json:"correct_answers"`
 	CorrectOptions map[string][]qbank.Option `json:"correct_options"`
 	Mastery        *Mastery                  `json:"mastery,omitempty"`
+	Stats          Stats                     `json:"stats"`
 }
 
 type Mastery struct {

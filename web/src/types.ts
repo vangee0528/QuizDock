@@ -33,14 +33,16 @@ export interface Meta {
   chapters: string[];
   tags: string[];
   exams: string[];
-  stats: {
-    total: number;
-    attempted: number;
-    mastered: number;
-    accuracy: number;
-    due_reviews: number;
-  };
+  stats: Stats;
   settings: Settings;
+}
+
+export interface Stats {
+  total: number;
+  attempted: number;
+  mastered: number;
+  accuracy: number;
+  due_reviews: number;
 }
 
 export interface AuthStatus {
@@ -128,6 +130,7 @@ export interface AnswerResult {
     status: string;
     due_date: string;
   };
+  stats: Stats;
 }
 
 export interface Filters {

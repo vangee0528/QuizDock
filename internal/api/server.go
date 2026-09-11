@@ -31,6 +31,7 @@ import (
 )
 
 const maxUploadSize = int64(512 << 20)
+const questionPrefetchLimit = 5
 
 type Server struct {
 	store       *database.Store
@@ -70,6 +71,7 @@ func NewWithOptions(store *database.Store, options Options) http.Handler {
 	router.Use(server.loggingMiddleware)
 	router.Route("/api/v1", func(api chi.Router) {
 		api.Get("/health", server.health)
+		api.Get("/bootstrap", server.bootstrap)
 		api.Get("/auth/status", server.authStatus)
 		api.Post("/auth/login", server.login)
 		api.Post("/auth/logout", server.logout)
@@ -84,6 +86,7 @@ func NewWithOptions(store *database.Store, options Options) http.Handler {
 			protected.Put("/banks/{bankID}/enabled", server.setBankEnabled)
 			protected.Delete("/banks/{bankID}", server.removeBank)
 			protected.Get("/questions", server.questions)
+			protected.Post("/questions/batch", server.questionBatch)
 			protected.Get("/questions/{uid}", server.question)
 			protected.Post("/answers", server.answer)
 			protected.Get("/progress", server.progress)
@@ -116,9 +119,27 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 
 func (s *Server) authStatus(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
-	writeJSON(writer, http.StatusOK, map[string]any{
+	writeJSON(writer, http.StatusOK, s.authSnapshot(request))
+}
+
+func (s *Server) authSnapshot(request *http.Request) map[string]any {
+	return map[string]any{
 		"enabled": s.auth.enabled(), "authenticated": s.auth.authenticated(request), "username": s.auth.username,
-	})
+	}
+}
+
+func (s *Server) bootstrap(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	auth := s.authSnapshot(request)
+	payload := map[string]any{"auth": auth}
+	if authenticated, _ := auth["authenticated"].(bool); authenticated {
+		meta, err := s.store.Meta(request.Context(), s.version)
+		if handleError(writer, err) {
+			return
+		}
+		payload["meta"] = meta
+	}
+	writeJSON(writer, http.StatusOK, payload)
 }
 
 func (s *Server) login(writer http.ResponseWriter, request *http.Request) {
@@ -344,6 +365,24 @@ func (s *Server) question(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(writer, http.StatusOK, value)
+}
+
+func (s *Server) questionBatch(writer http.ResponseWriter, request *http.Request) {
+	var payload struct {
+		UIDs []string `json:"uids"`
+	}
+	if !decodeJSON(writer, request, &payload) {
+		return
+	}
+	if len(payload.UIDs) == 0 || len(payload.UIDs) > questionPrefetchLimit {
+		writeError(writer, http.StatusBadRequest, "每次需请求 1 至 5 道题")
+		return
+	}
+	questions, err := s.store.Questions(request.Context(), payload.UIDs)
+	if handleError(writer, err) {
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"questions": questions})
 }
 
 func (s *Server) answer(writer http.ResponseWriter, request *http.Request) {

@@ -109,6 +109,69 @@ func TestEncodedQuestionUIDRoute(t *testing.T) {
 	}
 }
 
+func TestQuestionBatchReturnsRequestedOrder(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := database.Open(filepath.Join(dataDir, "quizdock.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	pkg := apiSamplePackage()
+	second := pkg.Questions[0]
+	second.ID = "q-2"
+	second.Title = "Example-q-2"
+	second.Stem = "Second question"
+	pkg.Questions = append(pkg.Questions, second)
+	pkg.Manifest.QuestionCount = len(pkg.Questions)
+	if _, err := store.ImportPackage(context.Background(), pkg); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(store, "test", dataDir, ""))
+	defer server.Close()
+
+	payload, _ := json.Marshal(map[string][]string{"uids": {
+		"example.bank:q-2", "example.bank:q-1",
+	}})
+	response, err := http.Post(server.URL+"/api/v1/questions/batch", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	var result struct {
+		Questions []database.QuestionDetail `json:"questions"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Questions) != 2 || result.Questions[0].UID != "example.bank:q-2" || result.Questions[1].UID != "example.bank:q-1" {
+		t.Fatalf("unexpected question order: %+v", result.Questions)
+	}
+}
+
+func TestQuestionBatchRejectsMoreThanPrefetchWindow(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := database.Open(filepath.Join(dataDir, "quizdock.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := httptest.NewServer(New(store, "test", dataDir, ""))
+	defer server.Close()
+
+	payload, _ := json.Marshal(map[string][]string{"uids": {"1", "2", "3", "4", "5", "6"}})
+	response, err := http.Post(server.URL+"/api/v1/questions/batch", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+}
+
 func TestInstallOfficialBankFromRelease(t *testing.T) {
 	source := t.TempDir()
 	if err := os.Mkdir(filepath.Join(source, "questions"), 0o755); err != nil {
@@ -239,5 +302,76 @@ func TestProtectedAPIRequiresConfiguredLogin(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("authenticated status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+}
+
+func TestBootstrapCombinesAuthAndMetaWithoutExposingProtectedData(t *testing.T) {
+	type bootstrapPayload struct {
+		Auth struct {
+			Authenticated bool `json:"authenticated"`
+		} `json:"auth"`
+		Meta *database.Meta `json:"meta"`
+	}
+	dataDir := t.TempDir()
+	store, err := database.Open(filepath.Join(dataDir, "quizdock.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	publicServer := httptest.NewServer(New(store, "test", dataDir, ""))
+	response, err := http.Get(publicServer.URL + "/api/v1/bootstrap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var publicPayload bootstrapPayload
+	if err := json.NewDecoder(response.Body).Decode(&publicPayload); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	publicServer.Close()
+	if !publicPayload.Auth.Authenticated || publicPayload.Meta == nil || publicPayload.Meta.Version != "test" {
+		t.Fatalf("unexpected public bootstrap: %+v", publicPayload)
+	}
+
+	protectedServer := httptest.NewServer(NewWithOptions(store, Options{
+		Version: "test", DataDir: dataDir, AuthUsername: "tester", AuthPassword: "secret",
+	}))
+	defer protectedServer.Close()
+	response, err = http.Get(protectedServer.URL + "/api/v1/bootstrap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var protectedPayload bootstrapPayload
+	if err := json.NewDecoder(response.Body).Decode(&protectedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if protectedPayload.Auth.Authenticated || protectedPayload.Meta != nil {
+		t.Fatalf("unexpected protected bootstrap: %+v", protectedPayload)
+	}
+
+	credentials, _ := json.Marshal(map[string]string{"username": "tester", "password": "secret"})
+	loginResponse, err := http.Post(protectedServer.URL+"/api/v1/auth/login", "application/json", bytes.NewReader(credentials))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginResponse.Body.Close()
+	if loginResponse.StatusCode != http.StatusOK || len(loginResponse.Cookies()) == 0 {
+		t.Fatalf("login status = %d, cookies = %d", loginResponse.StatusCode, len(loginResponse.Cookies()))
+	}
+	request, _ := http.NewRequest(http.MethodGet, protectedServer.URL+"/api/v1/bootstrap", nil)
+	request.AddCookie(loginResponse.Cookies()[0])
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	protectedPayload = bootstrapPayload{}
+	if err := json.NewDecoder(response.Body).Decode(&protectedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if !protectedPayload.Auth.Authenticated || protectedPayload.Meta == nil {
+		t.Fatalf("unexpected authenticated bootstrap: %+v", protectedPayload)
 	}
 }

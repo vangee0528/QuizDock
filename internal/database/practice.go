@@ -100,10 +100,17 @@ func (s *Store) SubmitAnswer(ctx context.Context, uid string, answers map[string
 	if err != nil {
 		return AnswerResult{}, err
 	}
+	stats, err := loadStats(ctx, tx)
+	if err != nil {
+		return AnswerResult{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return AnswerResult{}, err
 	}
-	return AnswerResult{Correct: correct, CorrectAnswers: correctLabels, CorrectOptions: correctOptions, Mastery: mastery}, nil
+	return AnswerResult{
+		Correct: correct, CorrectAnswers: correctLabels, CorrectOptions: correctOptions,
+		Mastery: mastery, Stats: stats,
+	}, nil
 }
 
 func updateMastery(ctx context.Context, tx *sql.Tx, uid string, correct, trackWrong bool, requiredStreak int) (*Mastery, error) {

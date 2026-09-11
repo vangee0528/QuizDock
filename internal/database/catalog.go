@@ -127,8 +127,21 @@ func (s *Store) Meta(ctx context.Context, version string) (Meta, error) {
 		meta.Tags = append(meta.Tags, value)
 	}
 	rows.Close()
+	meta.Stats, err = loadStats(ctx, s.db)
+	if err != nil {
+		return Meta{}, err
+	}
+	return meta, nil
+}
+
+type rowQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func loadStats(ctx context.Context, queryer rowQuerier) (Stats, error) {
+	var stats Stats
 	var correct, attempts int
-	err = s.db.QueryRowContext(ctx, `SELECT
+	err := queryer.QueryRowContext(ctx, `SELECT
         COUNT(DISTINCT CASE WHEN a.id IS NOT NULL THEN q.uid END),
         COUNT(a.id), COALESCE(SUM(a.correct),0),
         COUNT(DISTINCT CASE WHEN m.status='mastered' THEN q.uid END),
@@ -138,14 +151,14 @@ func (s *Store) Meta(ctx context.Context, version string) (Meta, error) {
       LEFT JOIN attempts a ON a.question_uid=q.uid
       LEFT JOIN question_mastery m ON m.question_uid=q.uid
       WHERE q.active=1 AND q.ready=1 AND b.installed=1 AND b.enabled=1`, today()).
-		Scan(&meta.Stats.Attempted, &attempts, &correct, &meta.Stats.Mastered, &meta.Stats.DueReviews, &meta.Stats.Total)
+		Scan(&stats.Attempted, &attempts, &correct, &stats.Mastered, &stats.DueReviews, &stats.Total)
 	if err != nil {
-		return Meta{}, err
+		return Stats{}, err
 	}
 	if attempts > 0 {
-		meta.Stats.Accuracy = float64(correct) * 100 / float64(attempts)
+		stats.Accuracy = float64(correct) * 100 / float64(attempts)
 	}
-	return meta, nil
+	return stats, nil
 }
 
 func (s *Store) distinctQuestionValues(ctx context.Context, column string) ([]string, error) {
@@ -229,71 +242,149 @@ func (s *Store) QuestionQueue(ctx context.Context, filter QueueFilter) ([]QueueI
 }
 
 func (s *Store) Question(ctx context.Context, uid string) (QuestionDetail, error) {
-	var question QuestionDetail
-	var last sql.NullBool
-	err := s.db.QueryRowContext(ctx, `SELECT q.uid,q.bank_id,b.name,q.question_id,q.title,
+	questions, err := s.Questions(ctx, []string{uid})
+	if err != nil {
+		return QuestionDetail{}, err
+	}
+	if len(questions) == 0 {
+		return QuestionDetail{}, ErrNotFound
+	}
+	return questions[0], nil
+}
+
+func (s *Store) Questions(ctx context.Context, uids []string) ([]QuestionDetail, error) {
+	uniqueUIDs := make([]string, 0, len(uids))
+	seen := make(map[string]struct{}, len(uids))
+	for _, uid := range uids {
+		if uid == "" {
+			continue
+		}
+		if _, exists := seen[uid]; exists {
+			continue
+		}
+		seen[uid] = struct{}{}
+		uniqueUIDs = append(uniqueUIDs, uid)
+	}
+	if len(uniqueUIDs) == 0 {
+		return []QuestionDetail{}, nil
+	}
+
+	args := stringsToAny(uniqueUIDs)
+	rows, err := s.db.QueryContext(ctx, `SELECT q.uid,q.bank_id,b.name,q.question_id,q.title,
         q.chapter,q.topic,q.exam,q.question_type,q.stem_md,q.explanation_md,
         COALESCE(qs.starred,0),
-        (SELECT a.correct FROM attempts a WHERE a.question_uid=q.uid ORDER BY a.id DESC LIMIT 1)
+        (SELECT a.correct FROM attempts a WHERE a.question_uid=q.uid ORDER BY a.id DESC LIMIT 1),
+		q.active,b.installed
       FROM questions q JOIN question_banks b ON b.id=q.bank_id
       LEFT JOIN question_state qs ON qs.question_uid=q.uid
-      WHERE q.uid=? AND q.active=1 AND b.installed=1`, uid).
-		Scan(&question.UID, &question.BankID, &question.BankName, &question.QuestionID,
+		WHERE q.uid IN (`+placeholders(len(uniqueUIDs))+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byUID := make(map[string]*QuestionDetail, len(uniqueUIDs))
+	for rows.Next() {
+		var question QuestionDetail
+		var last sql.NullBool
+		var active, installed bool
+		if err := rows.Scan(&question.UID, &question.BankID, &question.BankName, &question.QuestionID,
 			&question.Title, &question.Chapter, &question.Topic, &question.Exam, &question.Type,
-			&question.Stem, &question.Explanation, &question.Starred, &last)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return QuestionDetail{}, ErrNotFound
+			&question.Stem, &question.Explanation, &question.Starred, &last, &active, &installed); err != nil {
+			return nil, err
 		}
-		return QuestionDetail{}, err
+		if !active || !installed {
+			continue
+		}
+		if last.Valid {
+			value := last.Bool
+			question.LastCorrect = &value
+		}
+		question.AssetBase = "/api/v1/assets/" + url.PathEscape(question.BankID) + "/"
+		question.Tags = []string{}
+		question.Parts = []qbank.Part{}
+		byUID[question.UID] = &question
 	}
-	if last.Valid {
-		value := last.Bool
-		question.LastCorrect = &value
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	question.AssetBase = "/api/v1/assets/" + url.PathEscape(question.BankID) + "/"
-	tagRows, err := s.db.QueryContext(ctx, "SELECT tag FROM question_tags WHERE question_uid=? ORDER BY tag", uid)
+	if len(byUID) == 0 {
+		return []QuestionDetail{}, nil
+	}
+
+	tagRows, err := s.db.QueryContext(ctx, `SELECT question_uid,tag FROM question_tags
+		WHERE question_uid IN (`+placeholders(len(uniqueUIDs))+`) ORDER BY question_uid,tag`, args...)
 	if err != nil {
-		return QuestionDetail{}, err
+		return nil, err
 	}
 	for tagRows.Next() {
-		var tag string
-		if err := tagRows.Scan(&tag); err != nil {
+		var uid, tag string
+		if err := tagRows.Scan(&uid, &tag); err != nil {
 			tagRows.Close()
-			return QuestionDetail{}, err
+			return nil, err
 		}
-		question.Tags = append(question.Tags, tag)
+		if question := byUID[uid]; question != nil {
+			question.Tags = append(question.Tags, tag)
+		}
+	}
+	if err := tagRows.Err(); err != nil {
+		tagRows.Close()
+		return nil, err
 	}
 	tagRows.Close()
-	partRows, err := s.db.QueryContext(ctx, "SELECT part_index,label,prompt_md FROM question_parts WHERE question_uid=? ORDER BY part_index", uid)
+
+	partRows, err := s.db.QueryContext(ctx, `SELECT p.question_uid,p.part_index,p.label,p.prompt_md,o.label,o.body_md
+		FROM question_parts p LEFT JOIN question_options o
+		ON o.question_uid=p.question_uid AND o.part_index=p.part_index
+		WHERE p.question_uid IN (`+placeholders(len(uniqueUIDs))+`)
+		ORDER BY p.question_uid,p.part_index,o.option_order`, args...)
 	if err != nil {
-		return QuestionDetail{}, err
+		return nil, err
 	}
+	partIndexes := make(map[string]map[int]int, len(byUID))
 	for partRows.Next() {
-		var part qbank.Part
-		if err := partRows.Scan(&part.Index, &part.Label, &part.Prompt); err != nil {
+		var uid, label, prompt string
+		var partIndex int
+		var optionLabel, optionBody sql.NullString
+		if err := partRows.Scan(&uid, &partIndex, &label, &prompt, &optionLabel, &optionBody); err != nil {
 			partRows.Close()
-			return QuestionDetail{}, err
+			return nil, err
 		}
-		optionRows, err := s.db.QueryContext(ctx, "SELECT label,body_md FROM question_options WHERE question_uid=? AND part_index=? ORDER BY option_order", uid, part.Index)
-		if err != nil {
-			partRows.Close()
-			return QuestionDetail{}, err
+		question := byUID[uid]
+		if question == nil {
+			continue
 		}
-		for optionRows.Next() {
-			var option qbank.Option
-			if err := optionRows.Scan(&option.Label, &option.Body); err != nil {
-				optionRows.Close()
-				partRows.Close()
-				return QuestionDetail{}, err
-			}
-			part.Options = append(part.Options, option)
+		indexes := partIndexes[uid]
+		if indexes == nil {
+			indexes = make(map[int]int)
+			partIndexes[uid] = indexes
 		}
-		optionRows.Close()
-		question.Parts = append(question.Parts, part)
+		position, exists := indexes[partIndex]
+		if !exists {
+			position = len(question.Parts)
+			indexes[partIndex] = position
+			question.Parts = append(question.Parts, qbank.Part{
+				Index: partIndex, Label: label, Prompt: prompt, Options: []qbank.Option{},
+			})
+		}
+		if optionLabel.Valid {
+			question.Parts[position].Options = append(question.Parts[position].Options, qbank.Option{
+				Label: optionLabel.String, Body: optionBody.String,
+			})
+		}
+	}
+	if err := partRows.Err(); err != nil {
+		partRows.Close()
+		return nil, err
 	}
 	partRows.Close()
-	return question, nil
+
+	result := make([]QuestionDetail, 0, len(byUID))
+	for _, uid := range uniqueUIDs {
+		if question := byUID[uid]; question != nil {
+			result = append(result, *question)
+		}
+	}
+	return result, nil
 }
 
 func (s *Store) Asset(ctx context.Context, bankID, assetPath string) ([]byte, string, string, error) {
