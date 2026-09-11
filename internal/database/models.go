@@ -32,6 +32,12 @@ type QuestionSummary struct {
 	LastCorrect *bool  `json:"last_correct"`
 }
 
+type QueueItem struct {
+	UID         string `json:"uid"`
+	Title       string `json:"title"`
+	LastCorrect *bool  `json:"last_correct,omitempty"`
+}
+
 type QuestionDetail struct {
 	QuestionSummary
 	Stem        string       `json:"stem_md"`

@@ -90,6 +90,12 @@ export interface QuestionSummary {
   last_correct: boolean | null;
 }
 
+export interface QueueItem {
+  uid: string;
+  title: string;
+  last_correct?: boolean | null;
+}
+
 export interface Option {
   label: string;
   body_md: string;

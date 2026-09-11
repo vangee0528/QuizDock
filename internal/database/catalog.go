@@ -171,7 +171,7 @@ func (s *Store) distinctQuestionValues(ctx context.Context, column string) ([]st
 	return values, rows.Err()
 }
 
-func (s *Store) QuestionQueue(ctx context.Context, filter QueueFilter) ([]QuestionSummary, error) {
+func (s *Store) QuestionQueue(ctx context.Context, filter QueueFilter) ([]QueueItem, error) {
 	clauses := []string{"q.active=1", "q.ready=1", "b.installed=1", "b.enabled=1"}
 	args := make([]any, 0)
 	if len(filter.BankIDs) > 0 {
@@ -203,7 +203,7 @@ func (s *Store) QuestionQueue(ctx context.Context, filter QueueFilter) ([]Questi
 		limit = 10_000
 	}
 	args = append(args, limit)
-	query := `SELECT q.uid,q.bank_id,b.name,q.question_id,q.title,q.chapter,q.topic,q.exam,q.question_type,
+	query := `SELECT q.uid,q.title,
         (SELECT a.correct FROM attempts a WHERE a.question_uid=q.uid ORDER BY a.id DESC LIMIT 1)
         FROM questions q JOIN question_banks b ON b.id=q.bank_id
         WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY ` + order + ` LIMIT ?`
@@ -212,12 +212,11 @@ func (s *Store) QuestionQueue(ctx context.Context, filter QueueFilter) ([]Questi
 		return nil, err
 	}
 	defer rows.Close()
-	result := make([]QuestionSummary, 0)
+	result := make([]QueueItem, 0)
 	for rows.Next() {
-		var question QuestionSummary
+		var question QueueItem
 		var last sql.NullBool
-		if err := rows.Scan(&question.UID, &question.BankID, &question.BankName, &question.QuestionID,
-			&question.Title, &question.Chapter, &question.Topic, &question.Exam, &question.Type, &last); err != nil {
+		if err := rows.Scan(&question.UID, &question.Title, &last); err != nil {
 			return nil, err
 		}
 		if last.Valid {

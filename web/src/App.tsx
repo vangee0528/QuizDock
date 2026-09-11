@@ -3,7 +3,7 @@ import { api, APIError } from "./api";
 import { Markdown } from "./Markdown";
 import type {
   AnswerResult, AuthStatus, BrowserSettings, Filters, Meta, Mode, Question,
-  QuestionSummary, SessionSnapshot, Settings, UpdateCatalog,
+  QueueItem, SessionSnapshot, Settings, UpdateCatalog,
 } from "./types";
 
 const SESSION_KEY = "quizdock.practice.v1";
@@ -88,8 +88,12 @@ function queueParams(mode: Mode, filters: Filters, dailyTarget = 20): URLSearchP
   return params;
 }
 
-function resultClass(value: boolean | null): string {
+function resultClass(value: boolean | null | undefined): string {
   return value === true ? "correct" : value === false ? "wrong" : "";
+}
+
+function compactLayout(): boolean {
+  return window.innerWidth <= 780;
 }
 
 export function App() {
@@ -98,20 +102,21 @@ export function App() {
   const [updates, setUpdates] = useState<UpdateCatalog | null>(null);
   const [mode, setMode] = useState<Mode>("sequence");
   const [filters, setFilters] = useState<Filters>({ banks: [] });
-  const [queue, setQueue] = useState<QuestionSummary[]>([]);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const [index, setIndex] = useState(-1);
   const [question, setQuestion] = useState<Question | null>(null);
   const [selections, setSelections] = useState<Record<string, string[]>>({});
   const [answerResult, setAnswerResult] = useState<AnswerResult | null>(null);
   const [startedAt, setStartedAt] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [practiceStarting, setPracticeStarting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [toast, setToast] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [showBanks, setShowBanks] = useState(false);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [installingBank, setInstallingBank] = useState("");
-  const [navigatorCollapsed, setNavigatorCollapsed] = useState(window.innerWidth < 850);
+  const [navigatorCollapsed, setNavigatorCollapsed] = useState(compactLayout);
   const legacyBrowserSettings = useRef<BrowserSettings | null>(loadJSON<BrowserSettings>(BROWSER_SETTINGS_KEY));
   const [browserSettings, setBrowserSettings] = useState<BrowserSettings>(() => ({
     ...defaultBrowserSettings,
@@ -187,7 +192,7 @@ export function App() {
 
   const openQuestion = useCallback(async (
     targetIndex: number,
-    targetQueue: QuestionSummary[] = queue,
+    targetQueue: QueueItem[] = queue,
     targetMode: Mode = mode,
     targetFilters: Filters = filters,
     restoreScroll?: number,
@@ -234,11 +239,18 @@ export function App() {
     if (targetMode === "chapter" && !targetFilters.chapter) return notify("请选择章节");
     if (targetMode === "random" && !targetFilters.tag) return notify("请选择 Tag");
     if (targetMode === "exam" && !targetFilters.exam) return notify("请选择真题试卷");
+    const saved = loadSession();
+    setNavigatorCollapsed(compactLayout() ? (restore ? saved?.navigatorCollapsed ?? true : true) : false);
+    setPracticeStarting(true);
     setLoading(true);
     try {
-      const response = await api.queue(queueParams(targetMode, targetFilters, meta.settings.daily_target));
+      const params = queueParams(targetMode, targetFilters, meta.settings.daily_target);
+      if (resumeUid) params.set("uid", resumeUid);
+      if (targetMode !== "random" && targetMode !== "review") {
+        params.set("scope", scopeKey(targetMode, targetFilters));
+      }
+      const response = await api.startPractice(params);
       let nextQueue = response.questions;
-      const saved = loadSession();
       if (targetMode === "random" && restore && saved?.queueUids.length) {
         const order = new Map(saved.queueUids.map((uid, position) => [uid, position]));
         nextQueue = [...nextQueue].sort((left, right) => (order.get(left.uid) ?? Number.MAX_SAFE_INTEGER) - (order.get(right.uid) ?? Number.MAX_SAFE_INTEGER));
@@ -246,26 +258,37 @@ export function App() {
       setMode(targetMode);
       setFilters(stableFilters(targetFilters));
       setQueue(nextQueue);
-      if (nextQueue.length === 0) {
+      if (nextQueue.length === 0 || !response.question) {
         setQuestion(null);
         setIndex(-1);
         notify("当前范围没有可练习题目");
         history.replaceState(null, "", "/");
         return;
       }
-      let uid = resumeUid;
-      if (!uid && targetMode !== "random" && targetMode !== "review") {
-        const savedProgress = await api.progress(scopeKey(targetMode, targetFilters));
-        uid = savedProgress.progress?.current_uid || "";
+      const targetIndex = Math.max(0, nextQueue.findIndex((item) => item.uid === response.question?.uid));
+      const next = response.question;
+      setIndex(targetIndex);
+      setQuestion(next);
+      setSelections({});
+      setAnswerResult(null);
+      setStartedAt(performance.now());
+      history.replaceState(null, "", practiceURL(targetMode, next.uid, targetFilters));
+      if (targetMode !== "random" && targetMode !== "review") {
+        void api.saveProgress({
+          scope_key: scopeKey(targetMode, targetFilters), mode: targetMode,
+          filters: stableFilters(targetFilters), current_uid: next.uid, current_index: targetIndex,
+        });
       }
-      const targetIndex = Math.max(0, nextQueue.findIndex((item) => item.uid === uid));
-      await openQuestion(targetIndex, nextQueue, targetMode, targetFilters, restore ? saved?.scrollY : undefined);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        window.scrollTo({ top: restore ? saved?.scrollY ?? 0 : 0, behavior: "auto" });
+      }));
     } catch (error) {
       notify(error instanceof Error ? error.message : "加载练习失败");
     } finally {
+      setPracticeStarting(false);
       setLoading(false);
     }
-  }, [filters, meta, mode, notify, openQuestion]);
+  }, [filters, meta, mode, notify]);
 
   useEffect(() => {
     void api.authStatus().then((value) => {
@@ -286,7 +309,6 @@ export function App() {
     const enabled = new Set(meta.banks.filter((bank) => bank.enabled).map((bank) => bank.id));
     const banks = route.filters.banks.filter((id) => enabled.has(id));
     const restoredFilters = { ...route.filters, banks: banks.length ? banks : [...enabled] };
-    setNavigatorCollapsed(loadSession()?.navigatorCollapsed ?? window.innerWidth < 850);
     void startPractice(route.mode, restoredFilters, route.uid, true);
   }, [meta, startPractice]);
 
@@ -453,6 +475,7 @@ export function App() {
 
   const leavePractice = () => {
     saveSnapshot();
+    setPracticeStarting(false);
     setQuestion(null);
     setSelections({});
     setAnswerResult(null);
@@ -478,7 +501,7 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell ${question ? "practice-active" : ""}`}>
+    <div className={`app-shell ${question || practiceStarting ? "practice-active" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <img className="brand-mark" src="/favicon.svg" alt="QuizDock 标志" />

@@ -66,6 +66,7 @@ func NewWithOptions(store *database.Store, options Options) http.Handler {
 	}
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
+	router.Use(middleware.Compress(5))
 	router.Use(server.loggingMiddleware)
 	router.Route("/api/v1", func(api chi.Router) {
 		api.Get("/health", server.health)
@@ -75,6 +76,7 @@ func NewWithOptions(store *database.Store, options Options) http.Handler {
 		api.Group(func(protected chi.Router) {
 			protected.Use(server.requireAuth)
 			protected.Get("/meta", server.meta)
+			protected.Get("/practice/start", server.startPractice)
 			protected.Get("/updates", server.updates)
 			protected.Get("/banks", server.banks)
 			protected.Post("/banks/import", server.importBank)
@@ -261,6 +263,18 @@ func (s *Server) removeBank(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) questions(writer http.ResponseWriter, request *http.Request) {
+	filter, ok := s.queueFilter(writer, request)
+	if !ok {
+		return
+	}
+	questions, err := s.store.QuestionQueue(request.Context(), filter)
+	if handleError(writer, err) {
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"questions": questions, "count": len(questions)})
+}
+
+func (s *Server) queueFilter(writer http.ResponseWriter, request *http.Request) (database.QueueFilter, bool) {
 	query := request.URL.Query()
 	limit, _ := strconv.Atoi(query.Get("limit"))
 	filter := database.QueueFilter{
@@ -271,15 +285,57 @@ func (s *Server) questions(writer http.ResponseWriter, request *http.Request) {
 	if filter.Mode == "review" && filter.Limit == 0 {
 		settings, err := s.store.Settings(request.Context())
 		if handleError(writer, err) {
-			return
+			return database.QueueFilter{}, false
 		}
 		filter.Limit = settings.DailyTarget
+	}
+	return filter, true
+}
+
+func (s *Server) startPractice(writer http.ResponseWriter, request *http.Request) {
+	filter, ok := s.queueFilter(writer, request)
+	if !ok {
+		return
 	}
 	questions, err := s.store.QuestionQueue(request.Context(), filter)
 	if handleError(writer, err) {
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"questions": questions, "count": len(questions)})
+	if len(questions) == 0 {
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"questions": questions, "count": 0, "current_index": -1, "question": nil,
+		})
+		return
+	}
+
+	currentUID := request.URL.Query().Get("uid")
+	if currentUID == "" && filter.Mode != "random" && filter.Mode != "review" {
+		scope := request.URL.Query().Get("scope")
+		if scope != "" {
+			progress, err := s.store.Progress(request.Context(), scope)
+			if handleError(writer, err) {
+				return
+			}
+			if progress != nil {
+				currentUID = progress.CurrentUID
+			}
+		}
+	}
+	currentIndex := 0
+	for index, question := range questions {
+		if question.UID == currentUID {
+			currentIndex = index
+			break
+		}
+	}
+	question, err := s.store.Question(request.Context(), questions[currentIndex].UID)
+	if handleError(writer, err) {
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"questions": questions, "count": len(questions),
+		"current_index": currentIndex, "question": question,
+	})
 }
 
 func (s *Server) question(writer http.ResponseWriter, request *http.Request) {

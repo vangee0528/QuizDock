@@ -1,5 +1,5 @@
 import type {
-  AnswerResult, AuthStatus, Bank, Meta, Question, QuestionSummary, Settings, UpdateCatalog,
+  AnswerResult, AuthStatus, Bank, Meta, Question, QueueItem, Settings, UpdateCatalog,
 } from "./types";
 
 export class APIError extends Error {
@@ -40,7 +40,13 @@ export const api = {
     method: "PUT", body: JSON.stringify({ enabled }),
   }),
   removeBank: (id: string, purgeLearning = false) => request<void>(`/api/v1/banks/${encodeURIComponent(id)}?purge_learning=${purgeLearning}`, { method: "DELETE" }),
-  queue: (params: URLSearchParams) => request<{ questions: QuestionSummary[]; count: number }>(`/api/v1/questions?${params}`),
+  queue: (params: URLSearchParams) => request<{ questions: QueueItem[]; count: number }>(`/api/v1/questions?${params}`),
+  startPractice: (params: URLSearchParams) => request<{
+    questions: QueueItem[];
+    count: number;
+    current_index: number;
+    question: Question | null;
+  }>(`/api/v1/practice/start?${params}`),
   question: (uid: string) => request<Question>(`/api/v1/questions/${encodeURIComponent(uid)}`),
   answer: (uid: string, answers: Record<string, string[]>, durationMs: number) => request<AnswerResult>("/api/v1/answers", {
     method: "POST", body: JSON.stringify({ uid, answers, duration_ms: durationMs }),

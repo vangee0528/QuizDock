@@ -39,12 +39,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .brand-meta button { padding: 0; border: 0; color: var(--accent); background: transparent; font-size: inherit; font-weight: 700; }
 .brand-meta a { color: #a95b29; font-weight: 800; text-decoration: none; }
 .brand-meta .mobile-home-settings { display: none; }
-.practice-active { grid-template-columns: minmax(0, 1fr); }
-.practice-active .sidebar { position: sticky; z-index: 60; top: 0; width: 100%; height: auto; padding: 12px 24px; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); box-shadow: 0 8px 24px rgba(31,39,33,.06); }
-.practice-active .brand { width: min(1080px, 100%); align-items: center; margin: 0 auto; }
-.practice-active .brand-copy { flex: 1; }
-.practice-active .brand-mark { width: 38px; height: 38px; border-radius: 12px; }
-.practice-active .side-section { display: none; }
 .practice-exit { flex: 0 0 auto; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--accent); background: var(--paper); font-size: .75rem; font-weight: 800; }
 .practice-exit:hover { border-color: #aac1b0; background: var(--accent-soft); }
 .side-section { padding: 18px 4px; border-top: 1px solid var(--line); }
@@ -218,6 +212,12 @@ select, .field input, .plan-fields input { width: 100%; padding: 10px 11px; bord
   .practice-layout .navigator-panel.collapsed { width: 168px; justify-self: end; }
 }
 
+@media (min-width: 781px) {
+  .practice-active .brand { flex-wrap: wrap; }
+  .practice-active .brand-copy { flex: 1; }
+  .practice-active .practice-exit { width: 100%; margin-top: 2px; }
+}
+
 @media (max-width: 1120px) {
   .workspace { padding-right: 42px; padding-left: 42px; }
 }
@@ -229,8 +229,11 @@ select, .field input, .plan-fields input { width: 100%; padding: 10px 11px; bord
   .app-shell:not(.practice-active) .workspace { display: none; }
   .brand { margin-bottom: 18px; }
   .brand-meta .mobile-home-settings { display: inline; }
-  .practice-active .sidebar { position: sticky; padding: 10px 14px; }
-  .practice-active .brand { margin: 0; }
+  .practice-active .sidebar { position: sticky; z-index: 60; top: 0; width: 100%; height: auto; padding: 10px 14px; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); box-shadow: 0 8px 24px rgba(31,39,33,.06); }
+  .practice-active .brand { width: 100%; align-items: center; margin: 0; }
+  .practice-active .brand-copy { flex: 1; }
+  .practice-active .brand-mark { width: 38px; height: 38px; border-radius: 12px; }
+  .practice-active .side-section { display: none; }
   .practice-active .brand-copy > span { display: none; }
   .practice-active .brand-meta { display: none; }
   .practice-exit { padding: 8px 10px; font-size: .68rem; }
