@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -37,6 +40,7 @@ jobs:
       - name: 打包并校验题库
         run: |
           output="${{ steps.bank.outputs.slug }}-${{ steps.bank.outputs.version }}.qbank"
+          node tools/audit-qbank.mjs "${{ steps.bank.outputs.directory }}"
           go run ./cmd/quizdock bank pack "${{ steps.bank.outputs.directory }}" "$output"
           go run ./cmd/quizdock bank validate "$output"
           sha256sum "$output" > "${output}.sha256"
